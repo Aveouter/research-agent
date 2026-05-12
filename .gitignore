@@ -58,3 +58,6 @@ qqbot/
 # === Dreaming runtime data ===
 workspace/memory/.dreams/
 workspace/memory/dreaming/
+
+# === Sensitive user data ===
+workspace/zhihu_cookies.json
