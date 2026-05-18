@@ -41,7 +41,8 @@ openclaw.json.last-good
 .config/
 
 # === Workspace runtime ===
-workspace*/.openclaw/
+workspace/.openclaw/
+workspace-paper-review/.openclaw/
 
 # === OS / editor ===
 .DS_Store
