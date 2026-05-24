@@ -59,6 +59,47 @@ openclaw pairing list feishu
 openclaw pairing approve feishu <CODE>
 ```
 
+## Architectural Rules
+
+### Workspace Naming
+
+Workspace directories follow the OpenClaw convention `workspace-<agentId>`:
+
+- **Main agent**: `workspace/` (no suffix — the default agent)
+- **Sub-agents**: `workspace-<agentId>/` where `<agentId>` matches the `id` field in `openclaw.json` → `agents.list[]`
+
+Examples: `workspace-autoresearch/`, `workspace-paper-review/`.
+
+When adding a new agent, create the workspace directory, register it in `openclaw.json` under `agents.list` with a matching `workspace` path, and add the workspace to `.gitignore`'s runtime-state exceptions.
+
+### Agent Design Pattern
+
+The system uses a **main agent → main agent skills → subagent → subagent skills** delegation chain:
+
+1. **Main agent (颖姗)** — bound to messaging channels, handles user-facing conversation, routing, and orchestration.
+2. **Main agent skills** — live at `skills/<skill-name>/` (project root). These compose subagent capabilities into user-facing workflows (e.g. `idea-generate` orchestrates paper context extraction, idea scoring, and output formatting).
+3. **Subagents** — each registered in `openclaw.json` under `agents.list`, spawned by the main agent via `sessions_spawn`. Each subagent owns a **single domain of responsibility**:
+   - `autoresearch` — paper ingest, wiki maintenance, literature queries, cross-paper comparison.
+   - `paper-review` — paper analysis pipeline (wiki entry → experiment extraction → review → validation design → codex prompt).
+4. **Subagent skills** — live at `workspace-<agentId>/skills/<skill-name>/`. These handle domain-specific subtasks within the subagent's responsibility scope.
+
+**Constraints:**
+
+- Each subagent must have a single, well-defined responsibility. Do not add unrelated capabilities to an existing subagent; create a new one instead.
+- Main agent skills orchestrate subagents. They should not reimplement logic that belongs in a subagent skill.
+- Subagent skills should be self-contained and produce outputs that downstream stages or other agents can consume.
+- The `agents.defaults.subagents.allowAgents` list in `openclaw.json` controls which subagents the main agent may spawn. Update it when adding new subagents.
+
+### Adding New Agents
+
+When creating a new subagent:
+
+1. Add an entry to `agents.list` in `openclaw.json` with `id`, `name`, and `workspace` path.
+2. Create `workspace-<agentId>/` with standard workspace files (SOUL.md, AGENTS.md, USER.md, TOOLS.md, MEMORY.md, HEARTBEAT.md, DREAMS.md).
+3. Add the agent ID to `agents.defaults.subagents.allowAgents`.
+4. Write skills under `workspace-<agentId>/skills/` following the single-responsibility principle.
+5. If the main agent needs to orchestrate this subagent, create or update a main agent skill under `skills/`.
+
 ## Gitignore Strategy
 
 `.env` and `auth-profiles.json` contain secrets — never track them. Runtime data (`logs/`, `tasks/`, `*.sqlite`), QMD caches (`qmd/`, `agents/*/qmd/`), CLI-managed dirs (`extensions/`), and channel data (`qqbot/`) are excluded. Agent workspaces and their checked-in skills are tracked, while runtime state inside those workspaces is ignored. `openclaw.json` is tracked because all tokens are env var references.
