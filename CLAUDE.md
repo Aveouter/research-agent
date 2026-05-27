@@ -85,10 +85,11 @@ The system uses a **main agent → main agent skills → subagent → subagent s
 
 **Constraints:**
 
-- Each subagent must have a single, well-defined responsibility. Do not add unrelated capabilities to an existing subagent; create a new one instead.
+- **Single minimal function per subagent.** Each subagent implements exactly one atomic capability. If a subagent grows to handle multiple distinct functions, split it. The litmus test: can you describe what the subagent does in a single verb phrase? If not, it's too broad.
 - Main agent skills orchestrate subagents. They should not reimplement logic that belongs in a subagent skill.
 - Subagent skills should be self-contained and produce outputs that downstream stages or other agents can consume.
 - The `agents.defaults.subagents.allowAgents` list in `openclaw.json` controls which subagents the main agent may spawn. Update it when adding new subagents.
+- Main agent's AGENTS.md and TOOLS.md define how subagents are invoked. Keep orchestration logic in main agent skills (`skills/<skill-name>/`), not scattered across workspace files.
 
 ### Adding New Agents
 
