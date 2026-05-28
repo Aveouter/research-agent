@@ -8,6 +8,9 @@ agents/*/agent/auth-state.json
 **/*.pem
 **/secrets*
 
+# === Binary/document assets (do not track) ===
+*.pdf
+
 # === Runtime data ===
 logs/
 tasks/
@@ -61,6 +64,11 @@ workspace/memory/.dreams/
 workspace/memory/dreaming/
 workspace-paper-review/memory/.dreams/
 workspace-paper-review/memory/dreaming/
+
+# === Benchmark runtime artifacts ===
+benchmarks/**/results/
+benchmarks/**/output/
+**/__pycache__/
 
 # === Sensitive user data ===
 workspace/zhihu_cookies.json
