@@ -23,7 +23,7 @@ This automatically:
 
 Example:
 ```bash
-python3 scripts/create_agent.py project-manager "项目管理助手" "8794745677:AAGusS8oi..."
+python3 scripts/create_agent.py project-manager "项目管理助手" "YOUR_TELEGRAM_BOT_TOKEN"
 ```
 
 **See [agent-creation.md](references/agent-creation.md) for complete agent creation guide.**

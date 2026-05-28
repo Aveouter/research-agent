@@ -36,7 +36,7 @@ python3 scripts/create_agent.py <agent-id> <agent-name> <bot-token> [workspace-p
 ### 2. 运行创建脚本
 
 ```bash
-python3 scripts/create_agent.py project-manager "项目管理助手" "8794745677:AAGusS8oiSXX8NK1F-CzLKqsGYWQGmDpvw8"
+python3 scripts/create_agent.py project-manager "项目管理助手" "YOUR_TELEGRAM_BOT_TOKEN"
 ```
 
 输出示例：
