@@ -41,6 +41,32 @@
 - 追问用户："是要完整审稿分析、整理 Wiki 入库、还是生成研究 idea？"
 - 不要自己猜测后直接执行
 
+**路由判断完成后、实际委托之前**，先执行下文的「知识检索」步骤，查完本地 wiki 再决定传递什么上下文给子 agent。
+
+---
+
+## 知识检索：先查 Wiki，再搜网络
+
+收到用户请求后，**在路由到子 agent 之前**，先执行知识检索。这确保你充分理解上下文，并能向子 agent 传递已有的 wiki 知识。
+
+### 第一步：查本地 Wiki
+
+1. **读索引** — 读取 `../workspace-autoresearch/wiki/index.md`，搜索与用户问题相关的论文、方法、领域关键词。
+2. **定位相关页面** — 根据索引中的链接，读取 `../workspace-autoresearch/wiki/domains/` 下的相关论文页、方法页、比较页等。
+3. **提取关键信息** — 从 wiki 页面中提取与用户问题直接相关的内容（实验数据、方法描述、已有分析结论等）。
+
+### 第二步：Wiki 不足时使用浏览器
+
+如果本地 wiki 中没有覆盖用户问题的内容（例如新论文、最新进展、具体技术细节），使用 OpenClaw browser 工具搜索网络：
+- 搜索 arXiv、Google Scholar、论文官网等来源
+- 获取补充信息后，与 wiki 中已有的知识合并
+
+### 检索结果的使用
+
+- 将检索到的 wiki 知识和网络补充信息**一并传递给子 agent**，作为任务上下文
+- 在委托模板的 `## 上下文` 中附上相关的 wiki 页面路径和摘要
+- 如果 wiki 中已有完整的论文分析，告知用户并询问是否需要重新分析或更新
+
 ---
 
 ## 路由 1：论文文献分析 → paper-review
@@ -61,13 +87,8 @@ Wiki 输入（来自 autoresearch 知识库）
 
 ### 委托前准备：查找已有 Wiki
 
-在委托 paper-review 之前，**先查找论文是否已有 Wiki 条目**。有 Wiki 的 paper-review 产出质量远高于无 Wiki。
-
-查找方法：
-
-1. **读索引** — `../workspace-autoresearch/wiki/index.md`，搜索论文标题关键词
-2. **按标题搜** — 在 `../workspace-autoresearch/wiki/domains/` 下搜索匹配的 `.md` 文件
-3. **如果用户直接上传了 PDF** — 说明论文可能尚未入库，Wiki 大概率不存在，直接传 PDF 路径
+在委托 paper-review 之前，**先完成上文"知识检索"步骤**。确保已查过 wiki index 和相关页面。
+如果用户直接上传了 PDF 且论文很可能尚未入库，可跳过 wiki 查找直接传递 PDF 路径。
 
 查找结果处理：
 - **找到了** → 把 Wiki 相对路径（相对于 paper-review workspace）写入 task 的 `Wiki路径` 字段
@@ -241,6 +262,51 @@ subagents(action: "list", target: "{sessionKey}")
 
 ---
 
+## 结果回写：将子 agent 产出整合进 Wiki
+
+子 agent 返回结果后，评估是否需要将产出回写到 wiki。
+
+### 判断是否需要回写
+
+满足以下任一条件时触发回写：
+- 子 agent 分析的论文**已在 wiki 中有条目**
+- 子 agent 的产出包含新的实验数据、方法比较、或与 wiki 中已有页面相关的新发现
+- 子 agent 完成了论文分析但论文尚无 wiki 条目（需要入库）
+
+### 回写方式
+
+1. **论文已有 wiki 条目** — 将子 agent 的关键发现（问题分析、验证实验设计等）追加或更新到对应 wiki 页面。通过 `sessions_spawn` 委托 `autoresearch` 执行更新：
+
+```
+sessions_spawn(
+  agentId: "autoresearch",
+  task: """更新以下 wiki 页面，追加子 agent 分析结果。
+
+## 目标页面
+{wiki/domains/{domain}/papers/{slug}.md}
+
+## 追加内容
+{子 agent 的关键发现摘要}
+
+## 要求
+保留已有内容，仅追加或更新相关段落。完成后汇报更新位置。""",
+  mode: "run",
+  runTimeoutSeconds: 600
+)
+```
+
+2. **论文尚无 wiki 条目** — 委托 `autoresearch` 将论文入库，把子 agent 已有的分析结果作为入库参考材料传入。
+
+3. **涉及方法/比较/概念页面** — 如果子 agent 的产出影响了 wiki 中的方法页、比较页或概念页，更新对应页面。
+
+### 回写原则
+
+- 回写是**主动行为**，不需要用户明确要求
+- 回写时保留 wiki 已有内容，只追加或更新
+- 回写完成后向用户说明更新了哪些 wiki 页面
+
+---
+
 ## 同时处理多个独立子任务
 
 ```
@@ -272,6 +338,15 @@ sessions_spawn(agentId: "autoresearch", task: "...论文B...", mode: "run")
 - 有 Wiki → 传路径，paper-review 产出质量更高
 - 没有 Wiki + 用户有 PDF → 传 PDF 作为兜底
 - 没有 Wiki + 也没有 PDF → 告诉用户需要先提供论文材料
+
+**Wiki 优先检索**
+- 收到任何科研相关问题时，先查本地 wiki（读 index.md → 定位相关页面 → 提取关键信息）
+- Wiki 有答案 → 直接基于 wiki 回答或传递给子 agent
+- Wiki 不足 → 用 OpenClaw browser 补充，不要跳过 wiki 直接搜网
+
+**产出自动回写**
+- 子 agent 返回结果后，主动评估是否与 wiki 文献关联
+- 关联则回写（委托 autoresearch 更新对应 wiki 页面），保持 wiki 的持续积累和时效性
 
 **不过度询问**
 - 用户给的信息足够就接，不要反复追问
