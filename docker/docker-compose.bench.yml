@@ -39,6 +39,12 @@ services:
       ALLOW_FROM: ""
       # Workspace
       OPENCLAW_WORKSPACE_ROOT: ${OPENCLAW_WORKSPACE_ROOT}
+      # Gateway binding (must be set explicitly in the container env; init.sh
+      # reads these, not just the host port mapping).
+      OPENCLAW_GATEWAY_PORT: ${OPENCLAW_GATEWAY_PORT:-18789}
+      OPENCLAW_GATEWAY_BIND: ${OPENCLAW_GATEWAY_BIND:-127.0.0.1}
+      OPENCLAW_GATEWAY_MODE: local
+      OPENCLAW_GATEWAY_ALLOW_INSECURE_AUTH: "true"
       # Sandbox off in CI
       OPENCLAW_SANDBOX_MODE: off
       OPENCLAW_PLUGINS_ENABLED: "false"

@@ -72,9 +72,23 @@ docker pull "${IMAGE}" >/dev/null
 
 # 3. Bring up the gateway service. We pass the project name to isolate the
 #    stack from any other compose project on the same host.
+#
+#    We `set -a; source` the env file so that docker compose's variable
+#    substitution (e.g. `${OPENCLAW_IMAGE}`, `${OPENCLAW_DATA_DIR}`) resolves
+#    from the keys we wrote. `--env-file` alone would only feed substitution
+#    for variables referenced in the compose file, not the compose process's
+#    own os.environ that some compose versions read for `${VAR}` lookups
+#    inside service definitions.
 log "bringing up compose (project=${COMPOSE_PROJECT})"
-OPENCLAW_DATA_DIR="${ENV_DIR}/openclaw-data" \
-  docker compose --project-name "${COMPOSE_PROJECT}" \
+set -a
+# shellcheck disable=SC1090
+. "${ENV_FILE}"
+set +a
+# Allow the data dir to be overridden by the .env file (it is written there),
+# but fall back to a host-local path that we create ourselves.
+: "${OPENCLAW_DATA_DIR:=${ENV_DIR}/openclaw-data}"
+mkdir -p "${OPENCLAW_DATA_DIR}"
+docker compose --project-name "${COMPOSE_PROJECT}" \
     -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" \
     up -d openclaw-bench
 
