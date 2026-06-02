@@ -328,8 +328,7 @@
     "profiles": {
       "minimax:cn": {
         "provider": "minimax",
-        "mode": "api_key",
-        "key": "MINIMAX_API_KEY"
+        "mode": "api_key"
       }
     }
   },
