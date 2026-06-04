@@ -20,29 +20,43 @@ on:
         type: boolean
         required: false
         default: false
+      # Restrict the run to a subset of benchmarks (comma-separated names). When
+      # unset, the full matrix runs. The aggregate job picks up only the
+      # bench-report.json files that were actually produced, so a partial run
+      # still yields a correct PR comment.
+      only:
+        description: "Comma-separated list of benchmark names to run (default: all)"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
 
+# Default matrix: every benchmark gets its own job so they run in parallel.
+# `workflow_dispatch` may narrow this to a subset via the `only` input. The
+# aggregate job always waits for the whole matrix to settle (`if: always()`)
+# and renders whatever bench-report.json files exist.
+#
+# Note: this list is duplicated on purpose instead of using a single
+# `BENCH_TARGETS` env var so that GitHub Actions can render one job per
+# benchmark with a clean display name and so that matrix.* keys are
+# available in `needs.*` and the aggregate step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  benchmark:
-    name: "Run OpenClaw benchmarks"
+  setup:
+    name: "Setup OpenClaw bench env"
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
 
     env:
       BENCH_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       BENCH_COMMIT: ${{ github.sha }}
-      BENCH_RESULTS_DIR: bench-results
-      BENCH_TARGETS: "idea-generate paper-review paper-review-pipeline paper-ingest idea-generation autoresearch"
-      # Pin the upstream image. Override via repo variable OPENCLAW_IMAGE.
-      OPENCLAW_IMAGE_DEFAULT: "acautomata/openclaw-docker-cn-im:latest"
-      # BENCH_DEBUG=1 only on PR runs. Direct pushes to main and the
-      # post-merge rerun are normal (no raw artifact dump). For a manual
-      # main-branch debug run, dispatch the workflow with debug=true.
-      BENCH_DEBUG: ${{ github.event_name == 'pull_request' && '1' || (github.event_name == 'workflow_dispatch' && inputs.debug && '1' || '') }}
 
     steps:
       - name: "Checkout"
@@ -67,6 +81,10 @@ jobs:
       - name: "Set up Docker Buildx"
         uses: docker/setup-buildx-action@v3
 
+      # env_setup.sh itself writes .bench-runtime/.env.bench, but we also
+      # render it here so that the matrix jobs can read the same env file
+      # without re-running setup. This step is idempotent and matches what
+      # env_setup.sh writes (kept in sync by code review).
       - name: "Render docker env file from secrets"
         env:
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
@@ -124,11 +142,178 @@ jobs:
           echo "--- last 40 log lines ---"
           docker logs --tail 40 openclaw-bench 2>&1 || true
 
-      - name: "Run each benchmark (env.sh then metrics.py)"
+      # Surface the container name and the rest of the runtime env to the
+      # matrix jobs. Each bench job will:
+      #   1. download this artifact
+      #   2. source .bench-runtime/bench-runtime-env.sh
+      #   3. run its own env.sh (which calls bench_force_recreate to get a
+      #      clean container before its metrics.py)
+      # We also teardown the initial container so the bench job's recreate
+      # is the only one in flight.
+      - name: "Upload bench runtime env for matrix jobs"
+        run: |
+          if [ ! -f .bench-runtime/bench-runtime-env.sh ]; then
+            echo "::error::bench-runtime-env.sh missing — env_setup.sh did not produce one"
+            exit 1
+          fi
+          # Sanity-print the container name so the matrix jobs can sanity-check.
+          # shellcheck disable=SC1091
+          . .bench-runtime/bench-runtime-env.sh
+          echo "BENCH_CONTAINER=${BENCH_CONTAINER:-<unset>}"
+          echo "BENCH_COMPOSE_PROJECT=${BENCH_COMPOSE_PROJECT:-<unset>}"
+
+      - name: "Tear down initial container (matrix jobs will recreate)"
+        if: always()
+        run: |
+          if [ -f .bench-runtime/bench-runtime-env.sh ]; then
+            # shellcheck disable=SC1091
+            . .bench-runtime/bench-runtime-env.sh
+          fi
+          if [ -n "${BENCH_COMPOSE_PROJECT:-}" ]; then
+            docker compose --project-name "${BENCH_COMPOSE_PROJECT}" \
+              -f docker/docker-compose.bench.yml \
+              --env-file .bench-runtime/.env.bench \
+              down -v --remove-orphans || true
+          fi
+
+      - name: "Upload runtime env artifact"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-runtime-env
+          # Bench jobs only need two files: the docker compose env-file
+          # and the bench-runtime-env.sh produced by env_setup.sh. We
+          # intentionally do NOT upload the whole .bench-runtime/
+          # directory because it contains openclaw-data/, a docker
+          # volume mount that has root-owned files upload-artifact
+          # cannot scandir (EACCES). Both files are dot-prefixed so we
+          # opt into include-hidden-files.
+          path: |
+            .bench-runtime/.env.bench
+            .bench-runtime/bench-runtime-env.sh
+          include-hidden-files: true
+          if-no-files-found: error
+
+  # One job per benchmark. They all share the same setup job, so the
+  # image pull and gateway boot happen exactly once. Each bench job then
+  # re-creates the container via bench_force_recreate (called from its own
+  # env.sh) so it starts from a known clean state.
+  bench:
+    name: "Bench: ${{ matrix.bench }}"
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        bench:
+          - idea-generate
+          - paper-review
+          - paper-review-pipeline
+          - paper-ingest
+          - idea-generation
+          - autoresearch
+
+    env:
+      BENCH_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      BENCH_COMMIT: ${{ github.sha }}
+      BENCH_RESULTS_DIR: bench-results
+      OPENCLAW_IMAGE_DEFAULT: "acautomata/openclaw-docker-cn-im:latest"
+      # BENCH_DEBUG=1 only on PR runs. Direct pushes to main and the
+      # post-merge rerun are normal (no raw artifact dump). For a manual
+      # main-branch debug run, dispatch the workflow with debug=true.
+      BENCH_DEBUG: ${{ github.event_name == 'pull_request' && '1' || (github.event_name == 'workflow_dispatch' && inputs.debug && '1' || '') }}
+
+    steps:
+      - name: "Skip if not in `only` filter"
+        id: filter
+        run: |
+          only="${{ github.event_name == 'workflow_dispatch' && inputs.only || '' }}"
+          if [ -z "$only" ]; then
+            echo "running (no filter)"
+            exit 0
+          fi
+          if echo ",$only," | grep -q ",${{ matrix.bench }},"; then
+            echo "running (matched filter: $only)"
+            exit 0
+          fi
+          echo "::notice::Skipping ${{ matrix.bench }} (not in only=$only)"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+
+      - name: "Checkout"
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: "Verify required secrets"
+        if: steps.filter.outputs.skip != 'true'
         env:
-          # Pulled in by env_setup.sh via $GITHUB_ENV; env_setup also writes
-          # .bench-runtime/bench-runtime-env.sh which we source here as a
-          # belt-and-suspenders measure.
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+        run: |
+          if [ -z "${MINIMAX_API_KEY:-}" ]; then
+            echo "::error::MINIMAX_API_KEY is not configured." >&2
+            exit 1
+          fi
+
+      - name: "Set up Python"
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "Set up Docker Buildx"
+        if: steps.filter.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: "Download bench runtime env"
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-runtime-env
+          path: .bench-runtime
+
+      - name: "Stage runtime env file"
+        if: steps.filter.outputs.skip != 'true'
+        run: |
+          set -e
+          if [ ! -f .bench-runtime/bench-runtime-env.sh.upload ] && [ -f .bench-runtime/bench-runtime-env.sh ]; then
+            cp .bench-runtime/bench-runtime-env.sh .bench-runtime/bench-runtime-env.sh.upload
+          fi
+          # `bench_runtime_env` is the env file env_setup.sh wrote; matrix
+          # jobs source it to learn BENCH_CONTAINER / BENCH_COMPOSE_PROJECT.
+          if [ -f .bench-runtime/bench-runtime-env.sh.upload ]; then
+            mv .bench-runtime/bench-runtime-env.sh.upload .bench-runtime/bench-runtime-env.sh
+          else
+            echo "::error::bench-runtime-env.sh missing from artifact"
+            ls -la .bench-runtime/ || true
+            exit 1
+          fi
+          if [ ! -f .bench-runtime/.env.bench ]; then
+            echo "::error::.env.bench missing from artifact"
+            ls -la .bench-runtime/ || true
+            exit 1
+          fi
+          # Sanity: ensure we got a container name.
+          # shellcheck disable=SC1091
+          . .bench-runtime/bench-runtime-env.sh
+          echo "Loaded runtime env: BENCH_CONTAINER=${BENCH_CONTAINER:-<unset>}"
+
+      - name: "Re-check container before running this bench"
+        if: steps.filter.outputs.skip != 'true'
+        run: |
+          # The setup job tore down the initial container; the bench's own
+          # env.sh will call bench_force_recreate to bring up a fresh one.
+          # We only need to confirm docker is responsive.
+          docker info >/dev/null
+          # Export the runtime env to this step so env.sh can find it.
+          # shellcheck disable=SC1091
+          . .bench-runtime/bench-runtime-env.sh
+          echo "BENCH_CONTAINER(historical)=${BENCH_CONTAINER:-<unset>} (will be recreated by env.sh)"
+
+      - name: "Run benchmark (env.sh then metrics.py)"
+        if: steps.filter.outputs.skip != 'true'
+        env:
           BENCH_CONTAINER: ${{ env.BENCH_CONTAINER }}
           BENCH_MOUNT: ${{ env.BENCH_MOUNT }}
           BENCH_OPENCLAW: openclaw
@@ -139,49 +324,135 @@ jobs:
           BENCH_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -eu
-          # Belt-and-suspenders: source the runtime-env file env_setup.sh wrote
-          # so BENCH_CONTAINER is definitely populated even if the
-          # $GITHUB_ENV export didn't propagate.
+          # Source the runtime env exported by the setup job so env.sh can
+          # call bench_force_recreate using the same compose project.
+          # shellcheck disable=SC1091
+          . .bench-runtime/bench-runtime-env.sh
+          # Each benchmark's env.sh does `[[ -f "${BENCH_ENV_FILE}" ]]`
+          # to decide whether to load the bench_force_recreate helper.
+          # In the original single-job workflow, env_setup.sh exported
+          # BENCH_ENV_FILE into $GITHUB_ENV. Across jobs, that export
+          # does not propagate, but the env-setup sourceable file
+          # itself is now downloaded as part of the setup->bench
+          # artifact. Re-export BENCH_ENV_FILE pointing at the local
+          # copy so the env.sh guard under `set -u` is satisfied.
+          export BENCH_ENV_FILE="${GITHUB_WORKSPACE}/.bench-runtime/bench-runtime-env.sh"
+          echo "BENCH_CONTAINER=${BENCH_CONTAINER:-<unset>}"
+          echo "BENCH_COMPOSE_PROJECT=${BENCH_COMPOSE_PROJECT:-<unset>}"
+          echo "BENCH_ENV_FILE=${BENCH_ENV_FILE}"
+          bench="${{ matrix.bench }}"
+          echo "=========================================="
+          echo "benchmark: $bench"
+          echo "=========================================="
+          if ! bash "benchmarks/$bench/env.sh"; then
+            echo "::error::$bench env.sh failed"
+            exit 1
+          fi
+          python3 "benchmarks/$bench/metrics.py"
+
+      - name: "Upload per-bench results"
+        if: always() && steps.filter.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-result-${{ matrix.bench }}
+          path: |
+            bench-results/${{ matrix.bench }}.json
+            benchmarks/${{ matrix.bench }}/bench-report.json
+          if-no-files-found: warn
+
+      - name: "Upload per-bench debug artifacts (PR runs only)"
+        if: always() && steps.filter.outputs.skip != 'true' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-debug-${{ matrix.bench }}
+          path: bench-debug/${{ matrix.bench }}
+          if-no-files-found: warn
+
+      # Best-effort container cleanup. We try to tear down the compose stack
+      # that bench_force_recreate created, so the next matrix job (or the
+      # aggregate step) doesn't see a leftover container.
+      - name: "Tear down compose stack"
+        if: always() && steps.filter.outputs.skip != 'true'
+        run: |
           if [ -f .bench-runtime/bench-runtime-env.sh ]; then
             # shellcheck disable=SC1091
             . .bench-runtime/bench-runtime-env.sh
           fi
-          echo "BENCH_CONTAINER=${BENCH_CONTAINER:-<unset>}"
-          if ! docker ps --filter name=openclaw-bench --filter status=running --format '{{.Names}}' | grep -q '^openclaw-bench$'; then
-            echo "::error::openclaw-bench container died before benchmarks could run. Dumping logs:"
-            docker logs openclaw-bench 2>&1 | tail -100 || true
-            exit 1
+          if [ -n "${BENCH_COMPOSE_PROJECT:-}" ]; then
+            docker compose --project-name "${BENCH_COMPOSE_PROJECT}" \
+              -f docker/docker-compose.bench.yml \
+              --env-file .bench-runtime/.env.bench \
+              down -v --remove-orphans || true
           fi
-          for bench in $BENCH_TARGETS; do
-            echo "=========================================="
-            echo "benchmark: $bench"
-            echo "=========================================="
-            # Re-check before each: the gateway may have crashed mid-run.
-            if ! docker ps --filter name=openclaw-bench --filter status=running --format '{{.Names}}' | grep -q '^openclaw-bench$'; then
-              echo "::error::$bench aborted: openclaw-bench container is no longer running"
-              docker logs --tail 50 openclaw-bench 2>&1 || true
-              exit 1
-            fi
-            if ! bash "benchmarks/$bench/env.sh"; then
-              echo "::error::$bench env.sh failed"
-              exit 1
-            fi
-            python3 "benchmarks/$bench/metrics.py"
-          done
 
-      - name: "Aggregate results and post PR comment"
-        if: always()
+  aggregate:
+    name: "Aggregate results and post PR comment"
+    needs:
+      - setup
+      - bench
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BENCH_REPO: ${{ github.repository }}
+      BENCH_PR_NUMBER: ${{ github.event.pull_request.number }}
+      BENCH_BASE_SUMMARY: ${{ secrets.BENCH_BASE_RESULTS_JSON }}
+      BENCH_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      BENCH_COMMIT: ${{ github.sha }}
+      BENCH_RESULTS_DIR: bench-results
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Download every per-bench result artifact produced by the matrix.
+      # We use a wildcard name pattern so the set of artifacts is data-driven
+      # by what the matrix actually emitted (and we don't fail if a bench
+      # was filtered out via `only` or skipped).
+      - name: "Download all bench results"
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bench-result-*
+          path: bench-results
+          merge-multiple: true
+
+      - name: "List downloaded reports"
+        run: |
+          echo "---- bench-results/ ----"
+          ls -la bench-results/ || true
+          echo "---- summary ----"
+          python3 - <<'PYEOF'
+          import json, glob, os
+          paths = sorted(glob.glob("bench-results/*.json"))
+          for p in paths:
+              try:
+                  d = json.load(open(p))
+                  total = d.get("total", 0)
+                  passed = d.get("passed", 0)
+                  avg = d.get("avg_score", 0.0)
+                  print(f"  {os.path.basename(p)}: {passed}/{total} pass, avg_score={avg:.3f}")
+              except Exception as e:
+                  print(f"  {p}: <parse error: {e}>")
+          if not paths:
+              print("  (no reports downloaded)")
+          PYEOF
+
+      - name: "Post PR comment"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BENCH_REPO: ${{ github.repository }}
-          # BENCH_PR_NUMBER is only meaningful for pull_request events; report_pr.py
-          # detects the empty value and falls back to printing the body to stdout.
-          BENCH_PR_NUMBER: ${{ github.event.pull_request.number }}
-          BENCH_BASE_SUMMARY: ${{ secrets.BENCH_BASE_RESULTS_JSON }}
+          # Force the report_pr.py renderer to use the merged dir.
+          BENCH_RESULTS_DIR: bench-results
         run: |
           python3 benchmarks/_common/report_pr.py
 
-      - name: "Upload bench-results as artifact"
+      - name: "Upload merged bench-results"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -190,21 +461,3 @@ jobs:
             bench-results/
             benchmarks/*/bench-report.json
           if-no-files-found: warn
-
-      - name: "Upload bench-debug artifacts (PR runs only)"
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bench-debug-${{ github.run_id }}
-          path: bench-debug/
-          if-no-files-found: warn
-
-      - name: "Tear down compose stack"
-        if: always()
-        run: |
-          if [ -n "${BENCH_COMPOSE_PROJECT:-}" ]; then
-            docker compose --project-name "${BENCH_COMPOSE_PROJECT}" \
-              -f docker/docker-compose.bench.yml \
-              --env-file .bench-runtime/.env.bench \
-              down -v --remove-orphans || true
-          fi
