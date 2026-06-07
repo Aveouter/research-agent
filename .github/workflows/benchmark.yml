@@ -4,11 +4,16 @@ on:
   # Run on every PR push (open / reopen / new commit / draft -> ready).
   # `synchronize` fires for every new commit pushed to the PR branch.
   #
-  # DEBUG mode policy: BENCH_DEBUG=1 is set ONLY on pull_request runs. Direct
-  # pushes to main and the post-merge rerun use the normal (non-DEBUG) path.
-  # workflow_dispatch also defaults to normal mode; pass the `debug` input
-  # explicitly to force DEBUG on a manual main-branch run.
-  pull_request:
+  # We use pull_request_target (not pull_request) so that fork PRs can
+  # access repository secrets (MINIMAX_API_KEY, etc.). The workflow file
+  # itself is always read from the BASE repo, and we explicitly check out
+  # the PR head SHA below so the fork's code is tested.
+  #
+  # DEBUG mode policy: BENCH_DEBUG=1 is set ONLY on pull_request_target
+  # runs. Direct pushes to main and the post-merge rerun use the normal
+  # (non-DEBUG) path. workflow_dispatch also defaults to normal mode; pass
+  # the `debug` input explicitly to force DEBUG on a manual main-branch run.
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
   push:
@@ -56,12 +61,15 @@ jobs:
 
     env:
       BENCH_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-      BENCH_COMMIT: ${{ github.sha }}
+      # For pull_request_target, github.sha points to the base branch HEAD.
+      # We want the PR head commit so the fork's code is actually tested.
+      BENCH_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: "Checkout"
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: "Verify required secrets"
@@ -216,13 +224,14 @@ jobs:
 
     env:
       BENCH_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-      BENCH_COMMIT: ${{ github.sha }}
+      BENCH_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       BENCH_RESULTS_DIR: bench-results
       OPENCLAW_IMAGE_DEFAULT: "acautomata/openclaw-docker-cn-im:latest"
-      # BENCH_DEBUG=1 only on PR runs. Direct pushes to main and the
+      # BENCH_DEBUG=1 only on PR runs (pull_request_target for forks,
+      # pull_request for same-repo branches). Direct pushes to main and the
       # post-merge rerun are normal (no raw artifact dump). For a manual
       # main-branch debug run, dispatch the workflow with debug=true.
-      BENCH_DEBUG: ${{ github.event_name == 'pull_request' && '1' || (github.event_name == 'workflow_dispatch' && inputs.debug && '1' || '') }}
+      BENCH_DEBUG: ${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request') && '1' || (github.event_name == 'workflow_dispatch' && inputs.debug && '1' || '') }}
 
     steps:
       - name: "Skip if not in `only` filter"
@@ -244,6 +253,7 @@ jobs:
         if: steps.filter.outputs.skip != 'true'
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: "Verify required secrets"
@@ -361,7 +371,7 @@ jobs:
           if-no-files-found: warn
 
       - name: "Upload per-bench debug artifacts (PR runs only)"
-        if: always() && steps.filter.outputs.skip != 'true' && github.event_name == 'pull_request'
+        if: always() && steps.filter.outputs.skip != 'true' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
         uses: actions/upload-artifact@v4
         with:
           name: bench-debug-${{ matrix.bench }}
@@ -399,13 +409,14 @@ jobs:
       BENCH_PR_NUMBER: ${{ github.event.pull_request.number }}
       BENCH_BASE_SUMMARY: ${{ secrets.BENCH_BASE_RESULTS_JSON }}
       BENCH_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-      BENCH_COMMIT: ${{ github.sha }}
+      BENCH_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       BENCH_RESULTS_DIR: bench-results
 
     steps:
       - name: "Checkout"
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: "Set up Python"
