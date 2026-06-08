@@ -321,9 +321,6 @@
   "models": {
     "mode": "merge",
     "providers": {
-      "default": {
-        "baseUrl": "https://api.minimaxi.com/anthropic"
-      },
       "minimax": {
         "baseUrl": "https://api.minimaxi.com/anthropic",
         "models": [
