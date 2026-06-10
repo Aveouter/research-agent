@@ -59,7 +59,7 @@
         "mode": "safeguard"
       },
       "sandbox": {
-        "mode": "all",
+        "mode": "off",
         "scope": "agent",
         "workspaceAccess": "rw"
       },
@@ -180,6 +180,11 @@
     },
     "fs": {
       "workspaceOnly": true
+    },
+    "web": {
+      "search": {
+        "provider": "duckduckgo"
+      }
     }
   },
   "channels": {
