@@ -90,7 +90,9 @@ Log 是追加式的，不要重写历史条目（除非用户要求）。
 - 评估设置不同时，先描述不匹配再比较结果
 - 基于 abstract-only 或 skimmed 证据的 claim 标注该限制
 
-## Subagent 配置
+## Subagent 配置（历史参考，当前 ingest 不 spawn 子 agent）
+
+> **注意：** 以下内容为历史设计参考。当前 ingest agent 不调用 `sessions_spawn`（见 TOOLS.md），所有任务在自身 session 内完成。产出通过 `wiki_apply` 写入 wiki vault，不写入文件系统。
 
 Paper ingest 使用 OpenClaw 的 sessions_spawn 机制。推荐配置：
 

@@ -13,7 +13,7 @@
 
 ## 文件操作
 
-可在本 workspace 目录内读写文件（outputs/、memory/ 等）。
+可在本 workspace 目录内读写文件（memory/ 等）。产物通过 inline reply 返回调用者，不写入 outputs/。
 
 ## 无子 agent 调度
 

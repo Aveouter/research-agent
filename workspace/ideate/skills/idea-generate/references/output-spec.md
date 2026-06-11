@@ -47,4 +47,4 @@ Before export, verify:
 
 ## Follow-Up Feedback
 
-After the first export, the user can ask to keep, reject, revise, re-rank, or expand ideas. Write follow-up recommendation files with versioned names such as `recommended-ideas.v2.md`; do not overwrite the first output.
+After the first export, the user can ask to keep, reject, revise, re-rank, or expand ideas. Return the revised output inline in the reply text; do not write versioned files to disk.

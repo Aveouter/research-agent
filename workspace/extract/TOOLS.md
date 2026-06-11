@@ -21,8 +21,8 @@
 
 ## 文件操作
 
-- 仅限本工作区目录：`outputs/`、`memory/`、`skills/`
-- 产物统一保存到 `outputs/{论文简称}/{论文简称}-experiment.md`
+- 仅限本工作区目录：`memory/`
+- 产物通过 inline reply 直接返回调用者，不写入文件系统
 
 ## 不使用的工具
 

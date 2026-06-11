@@ -29,9 +29,9 @@ Dashboard（`reports/open-questions.md`、`reports/contradictions.md` 等）用 
 
 ## 文件操作
 
-- 读：上游各阶段产出文件（按论文简称路径定位）
-- 写：仅审计报告 `outputs/{论文简称}/{论文简称}-audit.md`（写入本工作区目录）
-- **不修改**任何上游阶段产出文件
+- 读：上游各阶段产出内容（main agent 在 task 中传递）
+- 写：仅 `memory/YYYY-MM-DD.md` 过程记录，不创建 outputs/ 或其他产物文件
+- **不修改**任何上游阶段产出
 
 ## 不可用工具
 

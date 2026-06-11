@@ -78,7 +78,7 @@ judge 审查                                             design
 | C0 简单协调 | 问进度、要路径、解释已有产出、让你转述某个 wiki 已有事实 | 主 agent 直接回答；不派发 |
 | C1 轻量检索 | 只需查 1–2 个 wiki 页面即可回答的事实性问题或已有结论查询 | 先查 wiki，能答则直接答；不足再派发 |
 | C2 专业单任务 | 论文入库、单篇论文问题分析、单阶段验证设计、一次 idea 生成 | 委托 `orchestrate` 拆解派发 |
-| C3 复杂/多阶段 | 多篇论文、跨论文比较、需要网络补充、需要产出文件、需要连续多阶段衔接 | 委托 `orchestrate` 拆解派发 |
+| C3 复杂/多阶段 | 多篇论文、跨论文比较、需要网络补充、需要产出结果、需要连续多阶段衔接 | 委托 `orchestrate` 拆解派发 |
 
 **强制派发信号**：用户提供 PDF/URL/代码仓库、要求读论文正文、要求生成可保存产物、要求找研究问题/idea、需要最新网络检索、需要实验设计或 Codex 提示词。出现任一信号时，main agent 不要自己完成专业分析。
 
@@ -137,7 +137,7 @@ subagents(action: "list")
 ```
 
 Orchestrate 完成后会自动通知你。收到通知后：
-1. 阅读 orchestrate 的汇总报告（包含各 worker 的 agentId、sessionKey、产出文件路径）
+1. 阅读 orchestrate 的汇总报告（包含各 worker 的 agentId、sessionKey 和关键发现，以及每个成功 worker 的「完整产出」block（inline reply 原文），供 judge 审查使用）
 2. 按下文「Judge 质量门」对关键 worker 产出启动 `judge` 审查
 3. 只有 judge 通过后，才提炼关键发现并向用户汇报
 
@@ -153,12 +153,12 @@ Orchestrate 完成后会自动通知你。收到通知后：
 
 满足任一条件就触发：
 - Orchestrate 汇总报告中标记为成功的 worker 产出
-- Worker 产出包含文件路径、wiki 更新、实验设计、idea、benchmark answer 或其他可复用结论
+- Worker 产出包含 wiki 更新、实验设计、idea、benchmark answer 或其他可复用结论
 - CI benchmark 中收到 worker final reply
 
 ### 审查方式
 
-通过 `sessions_spawn` 到 `judge`（main 直接派发），传入原任务、被审查的 worker 信息和产出文件。详见 `skills/benchmark/`。
+通过 `sessions_spawn` 到 `judge`（main 直接派发），传入原任务和被审查的 worker 信息（inline reply 内容）。详见 `skills/benchmark/`。
 
 ### 处理 judge 结论
 
@@ -176,9 +176,6 @@ Orchestrate 完成后会自动通知你。收到通知后：
 
 ```
 ✅ {子agent名称} 完成了 {执行了哪些阶段}
-
-📁 产出文件：
-- {文件路径列表}
 
 🔑 关键发现：
 1. ...

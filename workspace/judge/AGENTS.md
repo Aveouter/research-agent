@@ -21,7 +21,6 @@ main agent 或 benchmark 传入：
 
 - 原始任务或 benchmark question
 - 被审查 agent 的 id 和最终回复
-- 产出文件路径（如有）
 - rubric / gold_answer / must_contain（benchmark 场景）
 - 已知上下文（如有）
 
@@ -32,7 +31,7 @@ main agent 或 benchmark 传入：
 按优先级检查：
 
 1. **任务完成度** — 是否回答了原任务，是否返回最终结果而不是 pending/runId
-2. **结构完整性** — 是否包含要求的章节、字段、文件路径
+2. **结构完整性** — 是否包含要求的章节、字段、产出内容
 3. **证据与忠实性** — 是否区分事实和推断，是否把弱证据说成强结论，是否有编造
 4. **约束遵守** — 是否遵守"不直接做某事"等边界要求
 5. **可复用性** — 产出是否足够具体，能被下游 agent/wiki/CI judge 复用

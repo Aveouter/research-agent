@@ -16,21 +16,22 @@
 
 ### 输入
 
-- 论文基础 Wiki 文档（可选，提供背景上下文）
-- 问题分析文档（`*-problem.md`，来自 S3）
-- 验证实验设计文档（`*-validation.md`，来自 S4）
+- 论文基础 Wiki 文档（可选，提供背景上下文；使用 wiki_get 读取）
+- 问题分析文档（来自 S3 critic 的 inline reply，由调用者在 task 中传递）
+- 验证实验设计文档（来自 S4 design 的 inline reply，由调用者在 task 中传递）
 - 代码仓库路径或结构说明（可选）
 
 ### 输出
 
-- `{论文简称}-codex-prompt.md` — 一份完整的、可直接发给 claude-code 的任务提示词
+- 在回复中直接返回完整的 claude-code 任务提示词文档（Markdown），标题为 `# 发给 claude-code 的完整任务提示词`
+- 不写入文件系统
 
 ### 本 agent 不做什么
 
 - 不写代码、不运行实验、不做论文分析
 - 不负责 S2-S4 阶段的任何工作（实验提取、问题分析、实验设计）
 - 不跨 agent 编排——不调用 sessions_spawn，不委派其他 agent
-- 不修改上游阶段的产出文件
+- 不修改上游阶段的产出
 - 不维护 wiki
 
 ## Wiki 工具（只读）
@@ -53,7 +54,6 @@
 - Markdown 格式，标题必须为 `# 发给 claude-code 的完整任务提示词`
 - 遵循 SKILL.md 中定义的输出模板
 - 缺失信息用占位符（`此处应填写...`），不臆造路径
-- 输出保存到调用方指定的路径，或默认 `outputs/{论文简称}/{论文简称}-codex-prompt.md`
 
 ## 工作原则
 

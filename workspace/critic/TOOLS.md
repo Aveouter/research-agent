@@ -13,7 +13,7 @@
 
 ## 文件操作
 
-可在自身 workspace 目录内读写文件。
+可在自身 workspace 目录内读写 memory/ 等过程文件。产物（问题分析文档）通过 inline reply 返回调用者。
 
 ## 不具备的能力
 

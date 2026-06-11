@@ -7,7 +7,7 @@ description: 从论文、wiki、实验结果和用户约束中生成有证据支
 
 ## Overview
 
-Generate candidate research ideas from evidence. The simple demo path still supports papers under a local `paper/` folder, but the normal OpenClaw path can also intake relevant wiki pages, paper-review outputs, experiment logs, failed attempts, repository context, and user preferences. The skill summarizes the research landscape, proposes improvement ideas, filters and ranks them, and writes the most recommended ideas to Markdown.
+Generate candidate research ideas from evidence. The simple demo path still supports papers under a local `paper/` folder, but the normal OpenClaw path can also intake relevant wiki pages, paper-review outputs, experiment logs, failed attempts, repository context, and user preferences. The skill summarizes the research landscape, proposes improvement ideas, filters and ranks them, and returns the most recommended ideas inline in the reply text.
 
 Do not produce unconstrained brainstorming. Produce ideas that are grounded in paper evidence, comparable side by side, and ready for human review or downstream evaluation. Each idea must target one concrete pain point from a specific paper/wiki page, or from a same-type cluster of 2–4 related papers; broad directions without a named pain point are not valid idea cards.
 
@@ -50,37 +50,24 @@ If an optional dependency is missing, the extractor records an unavailable-extra
 
 ## Minimum Runnable Workflow
 
-Use this workflow for the minimum runnable path. Keep the paper-only path compatible, but add workspace context when it is available:
+Use this workflow for the minimum runnable path. Internal scripts may write intermediate files to temp directories for processing, but the final delivery to the caller is always inline reply text (the full recommended-ideas.md content).
 
 1. Normalize the user request into the checklist fields in `references/brief-template.md`; mark missing fields as assumptions.
 2. Build a concise context digest from user-provided materials, relevant OpenClaw workspace pages, experiment results, failed attempts, code constraints, and user preferences.
 3. Locate the paper folder when present. Default to `<workspace>/paper`.
-4. Create a run directory under `idea-runs/YYYYMMDD-HHMMSS-<topic-slug>/`.
+4. Create a temp run directory for script intermediates (e.g., `idea-runs/YYYYMMDD-HHMMSS-<topic-slug>/`).
 5. Run `scripts/build_paper_context_pack.py` to extract paper text and limitation/future-work snippets when papers are available.
 6. Read the generated `paper-context.md` and `paper-context.json` if they exist.
-7. As the agent, write `paper-analysis.md` with:
-   - paper-by-paper summary
-   - cross-paper common findings
-   - limitations, gaps, and future-work signals
-   - transferable insights from one paper to another
-   - constraints from code, data, compute, metrics, and failed experiments when provided
-8. As the agent, write `draft-ideas.json` with 5-10 candidate Idea Cards based on:
-   - paper limitations
-   - future work
-   - contradictions or gaps across papers
-   - transferable insights from one paper to another
-   - experiment results and failed attempts
-   - user preferences and hard constraints
-   - simple, testable modifications
-   Each card must name its anchor paper(s) or wiki page(s), isolate one concrete pain point, and propose a targeted mechanism for that pain point.
+7. As the agent, write `paper-analysis.md` with paper-by-paper summary, cross-paper findings, limitations/gaps, transferable insights, and constraints (needed by step 12's `--analysis` flag).
+8. As the agent, write `draft-ideas.json` with 5-10 candidate Idea Cards (needed by steps 9-10 scripts).
 9. Run `scripts/idea_dedup.py`.
 10. Run `scripts/validate_idea_cards.py`.
-11. Fix any validation errors in the JSON.
-12. Run `scripts/write_idea_markdown.py`.
-13. Return the final `recommended-ideas.md` path and a short summary.
-14. If the ideas use wiki papers, include `Wiki writeback candidates` in the final summary: anchor source(s), generated idea IDs, and the conclusions/findings main agent should compile back into wiki.
+11. Fix any validation errors.
+12. Run `scripts/write_idea_markdown.py` to generate the final recommended-ideas.md.
+13. **Return the complete recommended-ideas.md content inline in the reply text** along with a short summary.
+14. If the ideas use wiki papers, include `Wiki writeback candidates` in the final summary.
 
-Example commands:
+Example commands (internal intermediates, temp dir):
 
 ```bash
 python <skill-root>/scripts/build_paper_context_pack.py --paper-dir paper --topic "<topic>" --out idea-runs/<run-name>
@@ -120,7 +107,7 @@ Read only the files needed for the current request, in this order:
 2. `paper/` folder via `scripts/build_paper_context_pack.py`, if present.
 3. Generated `paper-context.md`, if present.
 4. Relevant wiki pages (via `wiki_get` / `wiki_search`), starting from the wiki index when available.
-5. Relevant `/workspace/shared/paper-review-outputs/` outputs, if the task depends on reviewed papers or extracted experiments.
+5. Relevant reviewed papers or extracted experiments from wiki (use `wiki_search`/`wiki_get`).
 6. Experiment logs, result tables, ablations, failed attempts, or qualitative observations.
 7. Relevant `memory/` or `MEMORY.md` entries for recent discussion and failures, if present.
 8. Repo files needed to understand the baseline or implementation scope, if needed.
@@ -132,7 +119,7 @@ Do not bulk-load the entire wiki.
 1. Build the `Idea Generation Brief`
 2. Build a compact context digest when the task uses workspace context beyond papers.
 3. Build paper context from `paper/` when available.
-4. Write `paper-analysis.md` before drafting ideas.
+4. Write `paper-analysis.md` and `draft-ideas.json` before running dedup/validate scripts.
 5. Group evidence into candidate opportunity buckets:
    - literature gaps
    - contradictory findings
@@ -151,7 +138,7 @@ Do not bulk-load the entire wiki.
    - novelty
    - expected impact
 11. Output recommended Idea Cards using `references/idea-card-template.md`.
-12. If the user provides feedback, apply `docs/interactive-refinement.md` and write a versioned follow-up such as `recommended-ideas.v2.md`.
+12. If the user provides feedback, apply `docs/interactive-refinement.md` and return the revised output inline in the reply text.
 
 Use `references/paper-demo-output-spec.md` for the runnable demo output contract.
 
@@ -172,19 +159,18 @@ Use `references/paper-demo-output-spec.md` for the runnable demo output contract
 
 After `recommended-ideas.md`, accept lightweight user feedback such as selected idea IDs, rejected ideas with reasons, new constraints, preferred risk level, or new experiment results. Use that feedback to re-rank existing ideas, revise selected ideas, or add a small number of new ideas.
 
-Do not overwrite the first recommendation file. Write a versioned follow-up artifact such as `recommended-ideas.v2.md` and summarize what feedback changed.
+Return the revised output inline in the reply text.
 
 ## Output Structure
 
-For the final user reply, keep it short and include:
+For the final reply, return the complete recommended-ideas.md content inline and include a short summary with:
 
-1. generated run directory
-2. final `recommended-ideas.md` path
-3. number of papers processed
-4. number of recommended ideas
-5. `Wiki writeback candidates` when any idea is anchored to wiki papers: source path/title, idea IDs, and concise findings for main agent to compile into wiki
+1. run directory (for reference)
+2. number of papers processed
+3. number of recommended ideas
+4. `Wiki writeback candidates` when any idea is anchored to wiki papers: source path/title, idea IDs, and concise findings for main agent to compile into wiki
 
-The main artifact is the Markdown file, not the chat response. Each Idea Card should follow `references/idea-card-template.md`. Overall output expectations are defined in `references/output-spec.md` and `references/paper-demo-output-spec.md`.
+The primary artifact is the inline reply content. Each Idea Card should follow `references/idea-card-template.md`.
 
 ## Benchmark and Self-Test
 

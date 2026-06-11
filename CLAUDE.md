@@ -111,6 +111,7 @@ The system uses a **main agent → main agent skills → subagent → subagent s
 - Subagent skills should be self-contained and produce outputs that downstream stages or other agents can consume.
 - The `agents.defaults.subagents.allowAgents` list in `openclaw.json` controls which subagents the main agent may spawn. Update it when adding new subagents.
 - Main agent's AGENTS.md and TOOLS.md define how subagents are invoked. Keep orchestration logic in main agent skills (`skills/<skill-name>/`), not scattered across workspace files.
+- **Subagent output delivery: inline reply only.** Subagent 产出只能走两条路：(1) 写入 wiki（通过 `wiki_apply` 等 wiki 工具），(2) 在 reply 中直接返回完整内容给调用者。**禁止**将产出写入文件系统（`outputs/`、`idea-runs/` 等目录）让其他 agent 通过路径去找。调用者（orchestrate/main）负责将上游 reply 内容嵌入下游 task 参数中传递。每个 subagent 的 TOOLS.md 应限制写入权限为 `memory/` 过程记录，产物通过 inline reply 返回。
 
 ### Benchmark CI 流程
 

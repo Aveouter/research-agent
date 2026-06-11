@@ -14,4 +14,4 @@
 - `memory/` — 编排过程记录
 - `MEMORY.md` — 长期编排经验
 
-所有 worker 产出文件由各 worker 自行维护在其 workspace 下。编排器只追踪任务状态和汇总结果。
+Worker 产出由各 worker 通过 inline reply 直接返回给编排器。编排器追踪任务状态和汇总结果，将上游 reply 内容传递给下游 worker。编排器不维护文件系统产出。

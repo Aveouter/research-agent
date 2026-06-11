@@ -21,10 +21,12 @@ Every idea must anchor to a specific paper/wiki page, or a same-type cluster of 
 5. Generate 5-10 candidate idea cards
 6. Deduplicate, keeping the strongest variant per cluster
 7. Validate every card's required fields and evidence chain
-8. Export to Markdown (`recommended-ideas.md`)
-9. On user feedback, produce versioned follow-up (e.g. `recommended-ideas.v2.md`)
+8. Return complete idea cards inline in reply text (Markdown)
+9. On user feedback, produce versioned follow-up inline
 
 Detailed workflow and I/O spec: `skills/idea-generate/SKILL.md`.
+
+Script intermediates (paper-context.md, draft-ideas.json, etc.) may use temporary workspace directories for internal processing, but the final delivery to the caller is always inline reply text.
 
 ## Quality Rules
 
@@ -44,7 +46,7 @@ Read-only. Use `wiki_status`, `wiki_search`, `wiki_get`, `wiki_lint` to anchor i
 
 - This agent generates ideas. It does NOT execute experiments, modify external repos, or orchestrate other agents.
 - This agent does NOT spawn sub-agents (`sessions_spawn` is not available).
-- Output artifacts go to `idea-runs/` or user-specified directories.
+- Return complete idea cards inline in reply text. Internal script intermediates may use workspace temp dirs, but the delivery interface is the reply.
 - Do not store secrets, raw logs, or chat history in output.
 
 ## Context Sufficiency

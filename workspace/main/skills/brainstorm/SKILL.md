@@ -77,7 +77,7 @@ sessions_spawn(
 - 5-10 cards, each anchored to a paper or 2-4 paper cluster with named pain point
 - Per card: pain point evidence, why now, proposed mechanism, minimum validation experiment, expected metric, risk
 - Deduplicate; mark weak cards low-confidence
-- Export to Markdown
+- Return complete idea cards inline in reply text
 - Include wiki writeback candidates""",
   mode: "run",
   runTimeoutSeconds: 1200
@@ -90,7 +90,7 @@ Spawn `reviewer` to validate cards (evidence anchoring, testable experiments, de
 
 ### Step 5: Present and writeback
 
-1. Present summary table (title, anchor papers, novelty, risk, cost) and file paths to user.
+1. Present summary table (title, anchor papers, novelty, risk, cost) and idea cards to user.
 2. If writeback candidates reference existing wiki pages, spawn `curate` to update them.
 3. Suggest next steps (run experiment, deep-dive, ingest more papers).
 
@@ -107,10 +107,9 @@ Minimum: domain/topic or at least one paper reference. If neither, ask user.
 ## 输出规范 / Output Specification
 
 1. **Idea summary table** for quick scanning
-2. **Detailed idea cards** in exported Markdown with full evidence chain and validation plan
-3. **File paths** to artifacts
-4. **Wiki update notice** for any updated pages
-5. **Next-step suggestions**
+2. **Detailed idea cards** inline in reply text with full evidence chain and validation plan
+3. **Wiki update notice** for any updated pages
+4. **Next-step suggestions**
 
 ## 示例 / Examples
 

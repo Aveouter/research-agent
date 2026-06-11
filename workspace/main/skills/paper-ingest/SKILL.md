@@ -67,7 +67,7 @@ sessions_spawn(
 )
 ```
 
-Input: ingest output path. Output: lint report (pass/fail, findings). Timeout: 600s.
+Input: ingest inline reply. Output: lint report (pass/fail, findings). Timeout: 600s.
 
 ### Step 3: Report to user
 

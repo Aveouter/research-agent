@@ -9,7 +9,8 @@
 
 ## 文件操作
 
-- 可读写本 agent workspace 目录内的文件（`outputs/`、`memory/` 等）
+- 可读写本 agent workspace 目录内的文件（`memory/` 等）
+- 产物通过 inline reply 直接返回调用者，不写入 outputs/
 - 只读访问上游阶段产出（wiki、S2-S4 文档）
 
 ## 限制

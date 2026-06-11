@@ -50,7 +50,7 @@ Main 会传递以下结构的信息：
 用户原始需求: <用户的原始消息>
 初步分析: <main 对需求的分析结论>
 推荐路由: <main 建议的子 agent 列表和顺序>
-已知上下文: <wiki 检索结果、已有文件路径等>
+已知上下文: <wiki 检索结果、已知材料等>
 ```
 
 ### Step 1: 拆解子任务
@@ -86,10 +86,10 @@ sessions_spawn(
   
   原始用户需求: <user's original request>
   Main 分析结论: <main's analysis>
-  已知上下文: <wiki page references, existing files, etc.>
-  上游产出: <上游 worker 的输出文件路径（如有依赖）>
+  已知上下文: <wiki page references, etc.>
+  上游产出: <上游 worker 的 inline reply 内容（如有依赖）>
   
-  产出要求: <具体产出文件和格式要求>
+  产出要求: <具体产出格式要求；在 reply 中直接返回完整产出，不写入文件>
   """,
   mode: "run",
   runTimeoutSeconds: <timeout>
@@ -98,15 +98,15 @@ sessions_spawn(
 
 **关键规则：**
 - 传递 main 提供的全部上下文，不截断
-- 明确产出文件路径（如 `outputs/{slug}/{slug}-experiment.md`）
-- 如果 worker 需要上游产出，把文件路径传下去
+- 要求 worker 在 reply 中直接返回完整产出（inline reply），不写入文件系统
+- 如果 worker 需要上游产出，把上游的 reply 内容嵌入 task 传递下去
 
 ### Step 3: 等待完成
 
 每个 `sessions_spawn(mode: "run")` 会阻塞直到 worker 完成。Worker 完成后：
-1. 记录 worker 的 `agentId`、输出文件路径、最终回复
-2. 检查产出是否存在且非空（基础质量检查）
-3. 如果有依赖此 worker 的后续子任务，立即派发
+1. 记录 worker 的 `agentId`、session key、最终回复内容
+2. 检查回复是否包含完整产出（基础质量检查）
+3. 如果有依赖此 worker 的后续子任务，立即派发（将上游 reply 嵌入 task）
 
 ### Step 4: 合成结果
 
@@ -125,8 +125,11 @@ sessions_spawn(
 #### T1: {描述} → {worker}
 - 状态: ✅ 完成 / ❌ 失败
 - Worker session: {sessionKey}
-- 产出文件: {paths}
-- 关键结果: {从 worker 回复中提取的核心信息}
+- 关键结果: {从 worker reply 中提取的核心信息}
+- 完整产出（供 main 派 judge 审查，禁止截断）:
+  ```markdown
+  {worker inline reply 的完整原文}
+  ```
 
 #### T2: ...
 
@@ -137,6 +140,8 @@ sessions_spawn(
 
 **合成规则：**
 - 忠实传递 worker 输出，不曲解、不截断
+- 每个成功 worker 的完整 inline reply 必须出现在「完整产出」小节中；「关键结果」只能作为摘要，不能替代完整产出
+- 如果单个 worker reply 过长，仍优先完整粘贴；确因上下文限制无法完整粘贴时，必须明确标注 `FULL_OUTPUT_TRUNCATED`，并附可继续获取完整内容的 session key 和恢复说明
 - 标注每个 worker 的 session key，方便 main 后续 `sessions_send` 修复
 - 如果某个 worker 失败，说明失败原因和建议的恢复方式
 
@@ -177,7 +182,7 @@ T1(ingest) → T2(curate: lint) → T3(extract) → ... (后续按需)
 **做：**
 - 拆解 main 已确认的任务为子任务
 - 派发给 worker subagents 并等待完成
-- 检查产出文件是否存在
+- 检查 worker reply 是否包含完整产出（基础质量检查）
 - 汇总 worker 结果返回 main
 
 **不做：**

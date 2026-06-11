@@ -9,7 +9,9 @@
 
 ## File Operations
 
-- Read and write within own workspace directory (`idea-runs/`, output files)
+- Read and write within own workspace directory for internal state only (`memory/`, script intermediates)
+- Primary delivery: return complete idea cards inline in reply text
+- Do NOT use `idea-runs/` as a delivery interface for other agents to discover by path
 - Read paper files when provided
 
 ## Not Available
