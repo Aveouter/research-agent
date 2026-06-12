@@ -10,7 +10,7 @@ set -euo pipefail
 log() { printf '\n[idea-generate.env] %s\n' "$*"; }
 
 # Bring up a fresh container for this shard.
-if [[ -f "${BENCH_ENV_FILE}" ]]; then
+if [[ -n "${BENCH_ENV_FILE:-}" && -f "${BENCH_ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   . "${BENCH_ENV_FILE}"
   bench_force_recreate

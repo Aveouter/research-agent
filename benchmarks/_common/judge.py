@@ -71,6 +71,12 @@ def judge_with_rules(answer: str, qa: dict) -> dict:
     }
 
 
+def _container_cli() -> str:
+    """Return the container runtime CLI used for benchmark exec calls."""
+    cli = os.environ.get("BENCH_CONTAINER_CLI") or os.environ.get("BENCH_CONTAINER_RUNTIME") or "docker"
+    return "docker" if cli == "auto" else cli
+
+
 # --- LLM judge ---------------------------------------------------------------
 
 
@@ -142,7 +148,7 @@ def judge_with_agent(qa: dict, answer: str, agent_id: str = "reviewer",
     container = container or os.environ.get("BENCH_CONTAINER")
     if container:
         cmd = [
-            "docker", "exec", "-i",
+            _container_cli(), "exec", "-i",
             "-e", "MINIMAX_API_KEY", "-e", "MINIMAX_BASE_URL",
             container,
         ] + cmd

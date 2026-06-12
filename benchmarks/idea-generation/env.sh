@@ -12,16 +12,23 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 log() { printf '\n[idea-generation.env] %s\n' "$*"; }
 
 # Bring up a fresh container.
-if [[ -f "${BENCH_ENV_FILE}" ]]; then
+if [[ -n "${BENCH_ENV_FILE:-}" && -f "${BENCH_ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   . "${BENCH_ENV_FILE}"
   bench_force_recreate
+fi
+if ! declare -F bench_container_cli >/dev/null; then
+  bench_container_cli() {
+    local cli="${BENCH_CONTAINER_CLI:-${BENCH_CONTAINER_RUNTIME:-docker}}"
+    [[ "${cli}" == "auto" ]] && cli=docker
+    "${cli}" "$@"
+  }
 fi
 
 # Stage tiny test papers into the ideate workspace so the agent can find them.
 TARGET="${BENCH_MOUNT}/workspace/ideate/bench-fixtures/bench-${BENCH_RUN_ID}/paper"
 log "staging paper fixture at ${TARGET}"
-docker exec "${BENCH_CONTAINER}" mkdir -p "${TARGET}"
+bench_container_cli exec "${BENCH_CONTAINER}" mkdir -p "${TARGET}"
 
 PAPER_A='---
 title: "TinyRec: A Toy Recommender Note"
@@ -40,7 +47,7 @@ year: 2026
 We replace dense item tower with top-k sparse routing (k=8). On the same
 MovieLens-1M split we get Recall@20 = 0.16, but inference FLOPs drop 40%.
 '
-echo "${PAPER_A}" | docker exec -i "${BENCH_CONTAINER}" bash -lc "cat > ${TARGET}/tinyrec.md"
-echo "${PAPER_B}" | docker exec -i "${BENCH_CONTAINER}" bash -lc "cat > ${TARGET}/sparserec.md"
+printf '%s' "${PAPER_A}" | bench_container_cli exec -i "${BENCH_CONTAINER}" bash -lc "cat > ${TARGET}/tinyrec.md"
+printf '%s' "${PAPER_B}" | bench_container_cli exec -i "${BENCH_CONTAINER}" bash -lc "cat > ${TARGET}/sparserec.md"
 
 log "env ready"

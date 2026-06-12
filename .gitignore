@@ -83,6 +83,7 @@ bench-results/
 bench-debug/
 .bench-runtime/
 .bench-runtime/.env.bench
+docker/.env.bench
 **/__pycache__/
 
 # === MCP runtime ===

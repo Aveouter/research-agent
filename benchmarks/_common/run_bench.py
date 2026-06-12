@@ -38,6 +38,28 @@ else:
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def _container_cli() -> str:
+    """Return the container runtime CLI used for benchmark exec/cp calls."""
+    cli = os.environ.get("BENCH_CONTAINER_CLI") or os.environ.get("BENCH_CONTAINER_RUNTIME") or "docker"
+    return "docker" if cli == "auto" else cli
+
+
+def _container_exec_cmd(container: str, *args: str, interactive: bool = False,
+                        env: list[str] | None = None) -> list[str]:
+    cmd = [_container_cli(), "exec"]
+    if interactive:
+        cmd.append("-i")
+    for item in env or []:
+        cmd.extend(["-e", item])
+    cmd.append(container)
+    cmd.extend(args)
+    return cmd
+
+
+def _container_cp_cmd(src: str, dst: str) -> list[str]:
+    return [_container_cli(), "cp", src, dst]
+
+
 # ---------------------------------------------------------------------------
 # Debug-mode helper
 # ---------------------------------------------------------------------------
@@ -133,7 +155,7 @@ def _container_cat(container: str, path: str) -> str | None:
     """Read a text file from inside *container*, returning its contents or None."""
     try:
         proc = subprocess.run(
-            ["docker", "exec", container, "cat", path],
+            _container_exec_cmd(container, "cat", path),
             capture_output=True, text=True, timeout=15,
         )
         if proc.returncode == 0:
@@ -154,7 +176,7 @@ def _container_find_session_jsonl(container: str, agent_id: str,
     candidate = f"{_SESSION_MOUNT}/agents/{agent_id}/sessions/{session_id}.jsonl"
     try:
         proc = subprocess.run(
-            ["docker", "exec", container, "test", "-f", candidate],
+            _container_exec_cmd(container, "test", "-f", candidate),
             capture_output=True, timeout=5,
         )
         if proc.returncode == 0:
@@ -273,7 +295,7 @@ def _extract_qa_sessions(container: str, session_key: str,
             dst = sessions_out / f"main-{main_session_id}.jsonl"
             try:
                 subprocess.run(
-                    ["docker", "cp", f"{container}:{src}", str(dst)],
+                    _container_cp_cmd(f"{container}:{src}", str(dst)),
                     capture_output=True, timeout=15,
                 )
                 if dst.exists():
@@ -314,8 +336,8 @@ def _extract_qa_sessions(container: str, session_key: str,
             "SELECT child_session_key, workspace_dir FROM descendants"
         )
         proc = subprocess.run(
-            ["docker", "exec", container, "sqlite3", "-readonly",
-             f"{_SESSION_MOUNT}/state/openclaw.sqlite", query],
+            _container_exec_cmd(container, "sqlite3", "-readonly",
+                                f"{_SESSION_MOUNT}/state/openclaw.sqlite", query),
             capture_output=True, text=True, timeout=10,
         )
         if proc.returncode == 0 and proc.stdout.strip():
@@ -393,7 +415,7 @@ def _extract_qa_sessions(container: str, session_key: str,
         dst = sessions_out / f"{agent_id}-{child_session_id}.jsonl"
         try:
             subprocess.run(
-                ["docker", "cp", f"{container}:{src}", str(dst)],
+                _container_cp_cmd(f"{container}:{src}", str(dst)),
                 capture_output=True, timeout=15,
             )
             if dst.exists():
@@ -408,7 +430,7 @@ def _extract_qa_sessions(container: str, session_key: str,
         dst = sessions_out / f"{agent_id}-sessions.json"
         try:
             subprocess.run(
-                ["docker", "cp", f"{container}:{src}", str(dst)],
+                _container_cp_cmd(f"{container}:{src}", str(dst)),
                 capture_output=True, timeout=10,
             )
         except (subprocess.TimeoutExpired, OSError):
@@ -419,7 +441,7 @@ def _extract_qa_sessions(container: str, session_key: str,
     if not (main_dst).exists():
         try:
             subprocess.run(
-                ["docker", "cp", f"{container}:{main_src}", str(main_dst)],
+                _container_cp_cmd(f"{container}:{main_src}", str(main_dst)),
                 capture_output=True, timeout=10,
             )
         except (subprocess.TimeoutExpired, OSError):
@@ -464,7 +486,8 @@ do
 done
 '''
     proc = subprocess.run(
-        ["docker", "exec", "-e", f"BENCH_MOUNT={mount}", container, "bash", "-lc", script],
+        _container_exec_cmd(container, "bash", "-lc", script,
+                            env=[f"BENCH_MOUNT={mount}"]),
         capture_output=True,
         text=True,
         timeout=120,
@@ -517,14 +540,14 @@ def run_agent(container: str, agent_id: str, qa: dict, run_id: str,
     session_key = f"agent:{agent_id}:bench-{run_id}-{qa['qa_id']}-{uuid.uuid4().hex}"
     # Propagate the LLM provider credentials into the container. Without
     # these the embedded openclaw agent cannot reach the model.
-    cmd = [
-        "docker", "exec", "-i",
-        "-e", "MINIMAX_API_KEY", "-e", "MINIMAX_BASE_URL",
+    cmd = _container_exec_cmd(
         container, "openclaw", "agent",
         "--agent", agent_id, "--message", prompt, "--json", "--local",
         "--session-key", session_key,
         "--timeout", str(qa.get("timeout_seconds", 1800)),
-    ]
+        interactive=True,
+        env=["MINIMAX_API_KEY", "MINIMAX_BASE_URL"],
+    )
     if model:
         cmd += ["--model", model]
     # Per-QA wall-clock cap. The QA may set `timeout_seconds` (per-call budget
@@ -550,8 +573,9 @@ def run_agent(container: str, agent_id: str, qa: dict, run_id: str,
               f"killing docker exec and marking QA timed_out",
               file=sys.stderr)
         try:
-            subprocess.run(["docker", "exec", container, "pkill", "-f",
-                            "openclaw agent"], capture_output=True, timeout=10)
+            subprocess.run(_container_exec_cmd(container, "pkill", "-f",
+                                                "openclaw agent"),
+                           capture_output=True, timeout=10)
         except Exception:
             pass
         stdout = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, (bytes, bytearray)) else (e.stdout or "")

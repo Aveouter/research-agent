@@ -2,56 +2,349 @@
 # benchmarks/_common/env_setup.sh
 #
 # Unified pre-benchmark env. Boots a minimal openclaw-docker-cn-im container,
-# mounts the current repo at /home/node/.openclaw, waits for `openclaw health`,
-# and runs one smoke turn. Every benchmark's env.sh runs after this.
+# mounts/copies the current repo at /home/node/.openclaw, waits for the gateway
+# to become ready, and exports helper functions for per-benchmark env.sh files.
 #
-# Required env (set by CI workflow or by the user for local runs):
+# Supported container runtimes:
+#   BENCH_CONTAINER_RUNTIME=docker     Use Docker + docker compose (CI default).
+#   BENCH_CONTAINER_RUNTIME=container  Use Apple's `container` CLI (no compose).
+#   BENCH_CONTAINER_RUNTIME=auto       Prefer a running Docker daemon, else container.
+#
+# Required env (set by CI, docker/.env.bench, or the caller):
 #   MINIMAX_API_KEY         -- LLM provider key (fail-fast if missing)
 #   MINIMAX_BASE_URL        -- optional, defaults to https://api.minimaxi.com
-#   BENCH_RUN_ID            -- used as the session key prefix and as the compose project name
+#   BENCH_RUN_ID            -- used as the session key prefix and compose/project name
 #   BENCH_COMPOSE_FILE      -- optional, defaults to docker/docker-compose.bench.yml
 #   BENCH_OPENCLAW_IMAGE    -- optional, overrides the image tag
 #
 # Exported after success:
-#   BENCH_CONTAINER=openclaw-bench
-#   BENCH_MOUNT=/home/node/.openclaw
-#   BENCH_OPENCLAW=openclaw   (the path to the CLI inside the container)
+#   BENCH_CONTAINER         -- running container name/id
+#   BENCH_CONTAINER_RUNTIME -- docker | container
+#   BENCH_CONTAINER_CLI     -- docker | container
+#   BENCH_MOUNT             -- /home/node/.openclaw
+#   BENCH_OPENCLAW          -- openclaw (path to CLI inside the container)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-COMPOSE_FILE="${BENCH_COMPOSE_FILE:-${ROOT}/docker/docker-compose.bench.yml}"
-IMAGE="${BENCH_OPENCLAW_IMAGE:-acautomata/openclaw-docker-cn-im:latest}"
-RUN_ID="${BENCH_RUN_ID:-local-$$}"
-COMPOSE_PROJECT="openclaw-bench-${RUN_ID}"
+LOCAL_ENV_FILE="${BENCH_LOCAL_ENV_FILE:-${ROOT}/docker/.env.bench}"
 
 log() { printf '\n[env_setup] %s\n' "$*"; }
 die() { printf '\n[env_setup][FATAL] %s\n' "$*" >&2; exit 1; }
 
+# Local runs commonly keep credentials in docker/.env.bench. CI injects the
+# same values through the process environment, so this is a no-op there.
+if [[ -f "${LOCAL_ENV_FILE}" ]]; then
+  log "loading ${LOCAL_ENV_FILE}"
+  set -a
+  # shellcheck disable=SC1090
+  . "${LOCAL_ENV_FILE}"
+  set +a
+fi
+
 # 0. Secrets check
 if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
-  die "MINIMAX_API_KEY is not set. Add it as a GitHub Actions secret, then re-run."
+  die "MINIMAX_API_KEY is not set. Export it or put it in docker/.env.bench, then re-run."
 fi
 : "${MINIMAX_BASE_URL:=https://api.minimaxi.com}"
+export MINIMAX_BASE_URL
 
-# 1. Build a temporary .env the compose file can read.
+COMPOSE_FILE="${BENCH_COMPOSE_FILE:-${ROOT}/docker/docker-compose.bench.yml}"
+IMAGE="${BENCH_OPENCLAW_IMAGE:-${OPENCLAW_IMAGE:-acautomata/openclaw-docker-cn-im:latest}}"
+RUN_ID="${BENCH_RUN_ID:-local-$$}"
+COMPOSE_PROJECT="openclaw-bench-${RUN_ID}"
+SAFE_RUN_ID="$(printf '%s' "${RUN_ID}" | tr -c 'A-Za-z0-9_.-' '-')"
+CONTAINER_NAME="${BENCH_CONTAINER_NAME:-openclaw-bench-${SAFE_RUN_ID}}"
 ENV_DIR="${ROOT}/.bench-runtime"
-mkdir -p "${ENV_DIR}"
 ENV_FILE="${ENV_DIR}/.env.bench"
+
+select_container_runtime() {
+  local requested="${BENCH_CONTAINER_RUNTIME:-${BENCH_CONTAINER_CLI:-auto}}"
+  case "${requested}" in
+    auto|"")
+      if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        printf 'docker\n'
+      elif command -v container >/dev/null 2>&1; then
+        printf 'container\n'
+      else
+        return 1
+      fi
+      ;;
+    docker|container)
+      printf '%s\n' "${requested}"
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+
+CONTAINER_RUNTIME="$(select_container_runtime)" || {
+  case "${BENCH_CONTAINER_RUNTIME:-${BENCH_CONTAINER_CLI:-auto}}" in
+    auto|"") die "neither a running Docker daemon nor Apple's container CLI is available" ;;
+    *) die "unsupported BENCH_CONTAINER_RUNTIME/BENCH_CONTAINER_CLI='${BENCH_CONTAINER_RUNTIME:-${BENCH_CONTAINER_CLI:-}}' (expected docker, container, or auto)" ;;
+  esac
+}
+CONTAINER_CLI="${BENCH_CONTAINER_CLI:-${CONTAINER_RUNTIME}}"
+command -v "${CONTAINER_CLI}" >/dev/null 2>&1 || die "container CLI '${CONTAINER_CLI}' not found in PATH"
+
+export BENCH_ROOT="${ROOT}"
+export BENCH_COMPOSE_FILE="${COMPOSE_FILE}"
+export BENCH_COMPOSE_ENV_FILE="${ENV_FILE}"
+export BENCH_OPENCLAW_IMAGE_RESOLVED="${IMAGE}"
+export BENCH_CONTAINER_RUNTIME="${CONTAINER_RUNTIME}"
+export BENCH_CONTAINER_CLI="${CONTAINER_CLI}"
+export BENCH_COMPOSE_PROJECT="${COMPOSE_PROJECT}"
+export BENCH_CONTAINER_NAME="${CONTAINER_NAME}"
+export BENCH_DATA_DIR="${ENV_DIR}/openclaw-data"
+
+bench_container_cli() {
+  "${BENCH_CONTAINER_CLI}" "$@"
+}
+
+bench_image_pull() {
+  local image="$1"
+  case "${BENCH_CONTAINER_RUNTIME}" in
+    docker) bench_container_cli pull "${image}" ;;
+    container) bench_container_cli image pull "${image}" ;;
+    *) echo "[bench_image_pull][FATAL] unsupported runtime ${BENCH_CONTAINER_RUNTIME}" >&2; return 64 ;;
+  esac
+}
+
+bench_logs_tail() {
+  local container="$1"
+  local lines="${2:-200}"
+  case "${BENCH_CONTAINER_RUNTIME}" in
+    docker) bench_container_cli logs --tail "${lines}" "${container}" ;;
+    container) bench_container_cli logs -n "${lines}" "${container}" ;;
+    *) echo "[bench_logs_tail][FATAL] unsupported runtime ${BENCH_CONTAINER_RUNTIME}" >&2; return 64 ;;
+  esac
+}
+
+bench_is_running() {
+  local container="$1"
+  case "${BENCH_CONTAINER_RUNTIME}" in
+    docker)
+      [[ "$(bench_container_cli inspect --format '{{.State.Running}}' "${container}" 2>/dev/null || true)" == "true" ]]
+      ;;
+    container)
+      bench_container_cli exec "${container}" true >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+bench_running_state() {
+  local container="$1"
+  case "${BENCH_CONTAINER_RUNTIME}" in
+    docker)
+      bench_container_cli inspect --format '{{.State.Running}}|{{.State.Status}}' "${container}" 2>/dev/null || true
+      ;;
+    container)
+      if bench_is_running "${container}"; then
+        printf 'true|running\n'
+      elif bench_container_cli inspect "${container}" >/dev/null 2>&1; then
+        printf 'false|stopped\n'
+      else
+        printf 'missing|missing\n'
+      fi
+      ;;
+  esac
+}
+
+bench_runtime_up() {
+  [[ -n "${BENCH_COMPOSE_ENV_FILE:-}" ]] || { echo "[bench_runtime_up][FATAL] BENCH_COMPOSE_ENV_FILE not set" >&2; return 64; }
+  set -a
+  # shellcheck disable=SC1090
+  . "${BENCH_COMPOSE_ENV_FILE}"
+  set +a
+  : "${OPENCLAW_DATA_DIR:=${BENCH_DATA_DIR}}"
+  mkdir -p "${OPENCLAW_DATA_DIR}"
+
+  case "${BENCH_CONTAINER_RUNTIME}" in
+    docker)
+      bench_container_cli compose --project-name "${BENCH_COMPOSE_PROJECT}" \
+        -f "${BENCH_COMPOSE_FILE}" --env-file "${BENCH_COMPOSE_ENV_FILE}" \
+        up -d --force-recreate openclaw-bench
+      local new_container
+      new_container="$(bench_container_cli ps --filter "label=com.docker.compose.project=${BENCH_COMPOSE_PROJECT}" \
+        --format '{{.Names}}' | head -n1)"
+      [[ -n "${new_container}" ]] || { echo "[bench_runtime_up][FATAL] no docker compose container found for ${BENCH_COMPOSE_PROJECT}" >&2; return 1; }
+      export BENCH_CONTAINER="${new_container}"
+      ;;
+    container)
+      local name="${BENCH_CONTAINER_NAME}"
+      bench_container_cli rm --force "${name}" >/dev/null 2>&1 || true
+      bench_container_cli run \
+        --detach \
+        --name "${name}" \
+        --env-file "${BENCH_COMPOSE_ENV_FILE}" \
+        --env TZ=Asia/Shanghai \
+        --env HOME=/home/node \
+        --env TERM=xterm-256color \
+        --env NODE_ENV=production \
+        --env LANG=en_US.UTF-8 \
+        --env LANGUAGE=en_US:en \
+        --env LC_ALL=en_US.UTF-8 \
+        --env SYNC_EXTENSIONS_MODE=none \
+        --env MINIMAX_API_KEY \
+        --env MINIMAX_BASE_URL \
+        --env OPENCLAW_GATEWAY_BIND=loopback \
+        --env OPENCLAW_GATEWAY_MODE=local \
+        --env OPENCLAW_GATEWAY_ALLOW_INSECURE_AUTH=true \
+        --env GATEWAY_TOKEN="${GATEWAY_TOKEN:-bench-only-not-a-real-token}" \
+        --user "${OPENCLAW_RUN_USER:-0:0}" \
+        --init \
+        "${BENCH_OPENCLAW_IMAGE_RESOLVED}"
+      export BENCH_CONTAINER="${name}"
+      ;;
+    *)
+      echo "[bench_runtime_up][FATAL] unsupported runtime ${BENCH_CONTAINER_RUNTIME}" >&2
+      return 64
+      ;;
+  esac
+}
+
+bench_reapply_setup() {
+  local container="${1:-${BENCH_CONTAINER:-}}"
+  [[ -n "${container}" ]] || { echo "[bench_reapply_setup][FATAL] no container" >&2; return 64; }
+  local root="${BENCH_ROOT}"
+  echo "[bench_reapply_setup] copy repo into ${container}:/home/node/.openclaw"
+  bench_container_cli exec "${container}" bash -lc '
+    set -e
+    cd /home/node/.openclaw
+    find . -mindepth 1 -delete 2>/dev/null || true
+  '
+  tar --exclude='.git' --exclude='.github' --exclude='.env' \
+      --exclude='*.sqlite*' --exclude='qmd' --exclude='logs' \
+      --exclude='tasks' --exclude='credentials' --exclude='cron' \
+      --exclude='devices' --exclude='identity' --exclude='feishu' \
+      --exclude='extensions' --exclude='qqbot' --exclude='.openclaw' \
+      --exclude='.dreams' --exclude='dreaming' --exclude='.bench-runtime' \
+      --exclude='bench-results' \
+      -C "${root}" -cf - . | \
+    bench_container_cli exec -i "${container}" tar -xf - -C /home/node/.openclaw
+  echo "[bench_reapply_setup] creating agent session dirs"
+  bench_container_cli exec "${container}" bash -lc '
+    set -e
+    for agent_id in main orchestrate ingest curate extract critic design spec audit ideate judge reviewer; do
+      mkdir -p "/home/node/.openclaw/agents/${agent_id}/sessions"
+    done
+  '
+  echo "[bench_reapply_setup] chown /home/node/.openclaw -> 1000:1000"
+  bench_container_cli exec "${container}" chown -R 1000:1000 /home/node/.openclaw || true
+  echo "[bench_reapply_setup] patching openclaw.json (SecretRef)"
+  bench_container_cli exec "${container}" python3 -c '
+import json, os, pathlib
+p = pathlib.Path("/home/node/.openclaw/openclaw.json")
+data = json.loads(p.read_text(encoding="utf-8"))
+prov = data.setdefault("models", {}).setdefault("providers", {}).setdefault("minimax", {})
+prov["apiKey"] = {"source": "env", "provider": "default", "id": "MINIMAX_API_KEY"}
+custom_base = os.environ.get("MINIMAX_BASE_URL", "")
+default_base = "https://api.minimaxi.com"
+if custom_base and custom_base != default_base:
+    prov["baseUrl"] = custom_base
+    print(f"patched models.providers.minimax.baseUrl -> {custom_base}")
+default_prov = data.get("models", {}).get("providers", {}).pop("default", None)
+if default_prov is not None:
+    print("removed models.providers.default overlay (not needed for bench)")
+# Sandbox mode requires Docker-in-Docker which is not available in CI/local bench containers.
+agents = data.setdefault("agents", {})
+defaults = agents.setdefault("defaults", {})
+defaults["sandbox"] = {"mode": "off"}
+# YOLO mode: auto-approve all tool calls so benchmark runs never stall on prompts.
+defaults["elevatedDefault"] = "full"
+tools = data.setdefault("tools", {})
+tools.setdefault("exec", {})["mode"] = "full"
+p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+print("patched models.providers.minimax.apiKey -> SecretRef(MINIMAX_API_KEY)")
+print("patched agents.defaults.sandbox.mode -> off")
+print("patched agents.defaults.elevatedDefault -> full")
+print("patched tools.exec.mode -> full (no-approval)")
+'
+  bench_container_cli exec "${container}" chown 1000:1000 /home/node/.openclaw/openclaw.json
+}
+
+bench_wait_ready() {
+  local container="${1:-${BENCH_CONTAINER:-}}"
+  [[ -n "${container}" ]] || { echo "[bench_wait_ready][FATAL] no container" >&2; return 64; }
+  echo "[bench_wait_ready] waiting for ${container} to come up and gateway to be ready"
+  for i in $(seq 1 90); do
+    if bench_is_running "${container}"; then
+      if bench_logs_tail "${container}" 200 2>&1 | grep -qE 'http server listening|starting channels and sidecars|\[gateway\] ready|heartbeat.*started'; then
+        echo "[bench_wait_ready] ${container} is up and gateway is ready after ${i} polls"
+        return 0
+      fi
+    else
+      local running
+      running="$(bench_running_state "${container}")"
+      case "${running}" in
+        false\|exited|false\|dead|false\|stopped|false\|removing|missing\|missing)
+          echo "[bench_wait_ready][FATAL] container ${container} state=${running}; dumping logs:" >&2
+          bench_logs_tail "${container}" 200 >&2 || true
+          return 1
+          ;;
+      esac
+    fi
+    sleep 2
+  done
+  echo "[bench_wait_ready][FATAL] gateway not ready in 180s" >&2
+  bench_logs_tail "${container}" 200 >&2 || true
+  return 1
+}
+
+bench_force_recreate() {
+  if [[ -z "${BENCH_COMPOSE_PROJECT:-}" || -z "${BENCH_COMPOSE_ENV_FILE:-}" ]]; then
+    echo "[bench_force_recreate][FATAL] BENCH_COMPOSE_PROJECT / BENCH_COMPOSE_ENV_FILE not set" >&2
+    return 64
+  fi
+  echo "[bench_force_recreate] bringing up openclaw-bench --force-recreate (runtime=${BENCH_CONTAINER_RUNTIME}, project=${BENCH_COMPOSE_PROJECT})"
+  bench_runtime_up
+  if ! bench_is_running "${BENCH_CONTAINER}"; then
+    echo "[bench_force_recreate] container ${BENCH_CONTAINER} not running after bench_runtime_up; dumping logs:" >&2
+    bench_logs_tail "${BENCH_CONTAINER}" 200 >&2 || true
+    echo "[bench_force_recreate] attempting start" >&2
+    bench_container_cli start "${BENCH_CONTAINER}" >/dev/null 2>&1 || true
+  fi
+  bench_reapply_setup "${BENCH_CONTAINER}"
+  bench_wait_ready "${BENCH_CONTAINER}"
+}
+
+bench_teardown() {
+  case "${BENCH_CONTAINER_RUNTIME}" in
+    docker)
+      if [[ -n "${BENCH_COMPOSE_PROJECT:-}" ]]; then
+        bench_container_cli compose --project-name "${BENCH_COMPOSE_PROJECT}" \
+          -f "${BENCH_COMPOSE_FILE}" --env-file "${BENCH_COMPOSE_ENV_FILE}" \
+          down -v --remove-orphans
+      fi
+      ;;
+    container)
+      if [[ -n "${BENCH_CONTAINER:-${BENCH_CONTAINER_NAME:-}}" ]]; then
+        bench_container_cli rm --force "${BENCH_CONTAINER:-${BENCH_CONTAINER_NAME}}" >/dev/null 2>&1 || true
+      fi
+      ;;
+  esac
+}
+
+# 1. Build a temporary .env the compose/container runner can read.
+mkdir -p "${ENV_DIR}"
 log "writing ${ENV_FILE}"
 cat >"${ENV_FILE}" <<EOF
 # Auto-generated by benchmarks/_common/env_setup.sh (run id=${RUN_ID})
 OPENCLAW_IMAGE=${IMAGE}
 OPENCLAW_DATA_DIR=${ENV_DIR}/openclaw-data
 OPENCLAW_RUN_USER=0:0
-DOCKER_BIND=127.0.0.1
-OPENCLAW_GATEWAY_PORT=18789
-OPENCLAW_GATEWAY_BIND=127.0.0.1
+DOCKER_BIND=${DOCKER_BIND:-127.0.0.1}
+OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT:-18789}
+OPENCLAW_GATEWAY_BIND=loopback
 TZ=Asia/Shanghai
 SYNC_OPENCLAW_CONFIG=false
 SYNC_EXTENSIONS_ON_START=false
 SYNC_MODEL_CONFIG=false
-MODEL_ID=minimax/MiniMax-M2.7
-PRIMARY_MODEL=minimax/MiniMax-M2.7
+MODEL_ID=${BENCH_MODEL:-minimax/MiniMax-M2.7}
+PRIMARY_MODEL=${BENCH_MODEL:-minimax/MiniMax-M2.7}
 BASE_URL=${MINIMAX_BASE_URL}
 API_PROTOCOL=anthropic
 CONTEXT_WINDOW=200000
@@ -62,16 +355,12 @@ ALLOW_FROM=
 OPENCLAW_WORKSPACE_ROOT=/home/node/.openclaw
 OPENCLAW_PLUGINS_ENABLED=false
 EOF
-mkdir -p "${ENV_DIR}/openclaw-data"
+mkdir -p "${BENCH_DATA_DIR}"
 
 # 2a. Pre-seed the data directory with a minimally-valid openclaw.json so
-#     the gateway starts clean (no config invalid errors) even though we
-#     haven't rsync'd the repo yet. The real config arrives during
-#     `bench_reapply_setup` and bench_force_recreate overwrites this
-#     openclaw.json with the repo copy + SecretRef patch.
+#     the gateway starts clean before the repo is copied in.
 log "pre-seeding openclaw.json in data dir to avoid gateway config errors"
-mkdir -p "${ENV_DIR}/openclaw-data"
-cat >"${ENV_DIR}/openclaw-data/openclaw.json" <<'PRESEEDEOF'
+cat >"${BENCH_DATA_DIR}/openclaw.json" <<'PRESEEDEOF'
 {
   "gateway": {"mode": "local", "bind": "loopback", "port": 18789, "auth": {"mode": "token"}},
   "models": {
@@ -87,327 +376,83 @@ cat >"${ENV_DIR}/openclaw-data/openclaw.json" <<'PRESEEDEOF'
   }
 }
 PRESEEDEOF
-# We can't set the apiKey until the container is running (the container
-# env provides MINIMAX_API_KEY). For now we use a placeholder; the SecretRef
-# patch in bench_reapply_setup replaces it after docker compose.
 
-# 2b. Pull the image (idempotent). Use docker hub mirror if available.
+# 2b. Pull the image (idempotent).
+log "using runtime=${BENCH_CONTAINER_RUNTIME} cli=${BENCH_CONTAINER_CLI}"
 log "pulling ${IMAGE}"
-docker pull "${IMAGE}" >/dev/null
+bench_image_pull "${IMAGE}" >/dev/null
 
 # 3. Bring up the gateway service.
-#    stack from any other compose project on the same host.
-#
-#    `--force-recreate` makes sure the container starts from a clean state on
-#    every workflow run: even when the image is unchanged, Docker Compose will
-#    discard the previous container. This guards against state leaking between
-#    consecutive PR runs that share the same runner image cache.
-#
-#    We `set -a; source` the env file so that docker compose's variable
-#    substitution (e.g. `${OPENCLAW_IMAGE}`, `${OPENCLAW_DATA_DIR}`) resolves
-#    from the keys we wrote. `--env-file` alone would only feed substitution
-#    for variables referenced in the compose file, not the compose process's
-#    own os.environ that some compose versions read for `${VAR}` lookups
-#    inside service definitions.
-log "bringing up compose (project=${COMPOSE_PROJECT}, --force-recreate)"
-set -a
-# shellcheck disable=SC1090
-. "${ENV_FILE}"
-set +a
-# Allow the data dir to be overridden by the .env file (it is written there),
-# but fall back to a host-local path that we create ourselves.
-: "${OPENCLAW_DATA_DIR:=${ENV_DIR}/openclaw-data}"
-mkdir -p "${OPENCLAW_DATA_DIR}"
-docker compose --project-name "${COMPOSE_PROJECT}" \
-    -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" \
-    up -d --force-recreate openclaw-bench
-
-# 4. Wait for `openclaw health` to return ready.
-CONTAINER="$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
-              --format '{{.Names}}' | head -n1)"
-[[ -n "${CONTAINER}" ]] || die "no container found for project ${COMPOSE_PROJECT}"
+log "bringing up container (project=${COMPOSE_PROJECT}, --force-recreate)"
+bench_runtime_up
+CONTAINER="${BENCH_CONTAINER}"
 log "container: ${CONTAINER}"
 
-# 5. Copy the repo into the container's /home/node/.openclaw so the openclaw
-#    gateway sees the checked-out tree. We use `docker cp` rather than a
-#    host-side rsync into the docker volume because the runner user can't
-#    write into the volume (root-owned), and `docker cp` is unprivileged.
-#    This is the same sequence `bench_force_recreate` re-runs after a
-#    container is recreated: clear the mount, stream the repo tarball,
-#    create the per-agent session dirs, chown to 1000:1000, and patch
-#    openclaw.json with the SecretRef patch.
-bench_reapply_setup() {
-  local container="${1:-${BENCH_CONTAINER:-}}"
-  [[ -n "${container}" ]] || { echo "[bench_reapply_setup][FATAL] no container" >&2; return 64; }
-  echo "[bench_reapply_setup] docker cp repo into ${container}:/home/node/.openclaw"
-  docker exec "${container}" bash -lc '
-    set -e
-    cd /home/node/.openclaw
-    find . -mindepth 1 -delete 2>/dev/null || true
-  '
-  tar --exclude='.git' --exclude='.github' --exclude='.env' \
-      --exclude='*.sqlite*' --exclude='qmd' --exclude='logs' \
-      --exclude='tasks' --exclude='credentials' --exclude='cron' \
-      --exclude='devices' --exclude='identity' --exclude='feishu' \
-      --exclude='extensions' --exclude='qqbot' --exclude='.openclaw' \
-      --exclude='.dreams' --exclude='dreaming' --exclude='.bench-runtime' \
-      --exclude='bench-results' \
-      -C "${ROOT}" -cf - . | \
-    docker exec -i "${container}" tar -xf - -C /home/node/.openclaw
-  echo "[bench_reapply_setup] creating agent session dirs"
-  docker exec "${container}" bash -lc '
-    set -e
-    for agent_id in main orchestrate ingest curate extract critic design spec audit ideate judge reviewer; do
-      mkdir -p "/home/node/.openclaw/agents/${agent_id}/sessions"
-    done
-  '
-  echo "[bench_reapply_setup] chown /home/node/.openclaw -> 1000:1000"
-  docker exec "${container}" chown -R 1000:1000 /home/node/.openclaw || true
-  echo "[bench_reapply_setup] patching openclaw.json (SecretRef)"
-  docker exec "${container}" python3 -c '
-import json, pathlib
-p = pathlib.Path("/home/node/.openclaw/openclaw.json")
-data = json.loads(p.read_text(encoding="utf-8"))
-prov = data.setdefault("models", {}).setdefault("providers", {}).setdefault("minimax", {})
-prov["apiKey"] = {"source": "env", "provider": "default", "id": "MINIMAX_API_KEY"}
-# Docker image upgrade: container init.sh writes models.providers.default
-# with baseUrl from env vars. When it has no models, OpenClaw rejects it.
-# Remove it so the minimax provider is used directly.
-default_prov = data.get("models", {}).get("providers", {}).pop("default", None)
-if default_prov is not None:
-    print("removed models.providers.default overlay (not needed for bench)")
-# Sandbox mode requires Docker-in-Docker which is not available in CI.
-# Disable sandboxing for the embedded agent runs.
-agents = data.setdefault("agents", {})
-defaults = agents.setdefault("defaults", {})
-defaults["sandbox"] = {"mode": "off"}
-# YOLO mode: auto-approve all tool calls so CI never stalls on prompts.
-defaults["elevatedDefault"] = "full"
-tools = data.setdefault("tools", {})
-tools.setdefault("exec", {})["mode"] = "full"
-p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-print("patched models.providers.minimax.apiKey -> SecretRef(MINIMAX_API_KEY)")
-print("patched agents.defaults.sandbox.mode -> off")
-print("patched agents.defaults.elevatedDefault -> full")
-print("patched tools.exec.mode -> full (no-approval)")
-'
-  docker exec "${container}" chown 1000:1000 /home/node/.openclaw/openclaw.json
-}
-log "docker cp repo into ${CONTAINER}:/home/node/.openclaw"
+# Defensive: docker compose up -d --force-recreate occasionally leaves the
+# container in created / exited state when the host daemon is under load.
+# bench_reapply_setup would then fail with "container is not running".
+if ! bench_is_running "${CONTAINER}"; then
+  echo "[env_setup] container ${CONTAINER} not running after bench_runtime_up; dumping logs:" >&2
+  bench_logs_tail "${CONTAINER}" 200 >&2 || true
+  echo "[env_setup] attempting start" >&2
+  bench_container_cli start "${CONTAINER}" >/dev/null 2>&1 || true
+fi
+
+# 4. Copy the repo into /home/node/.openclaw and patch bench settings.
+log "copy repo into ${CONTAINER}:/home/node/.openclaw"
 bench_reapply_setup "${CONTAINER}"
 log "repo copied into container"
+log "SecretRef patch applied via bench_reapply_setup (no restart)"
 
-  # 5b. The SecretRef patch for models.providers.minimax.apiKey lives inside
-  #     `bench_reapply_setup` (see section 5 above) so that
-  #     `bench_force_recreate` re-runs it after recreating the container.
-  #     The pre-seeded openclaw.json (section 2a) prevents the gateway from
-  #     starting up invalid, so we don't need to restart.
-  log "SecretRef patch applied via bench_reapply_setup (no restart)"
-
-# 6. Wait for the openclaw container to start and the gateway to become
-#    ready. The image's healthcheck is informational only (we set
-#    restart=no), so we don't rely on `health=healthy`. We poll the
-#    container's State.Running and tail its log for a known ready marker.
-#    `bench_wait_ready` is the same loop, factored out so that
-#    `bench_force_recreate` (used between benchmarks) can wait for the new
-#    container the same way.
-bench_wait_ready() {
-  local container="${1:-${BENCH_CONTAINER:-}}"
-  [[ -n "${container}" ]] || { echo "[bench_wait_ready][FATAL] no container" >&2; return 64; }
-  echo "[bench_wait_ready] waiting for ${container} to come up and gateway to be ready"
-  local ready=0
-  for i in $(seq 1 90); do
-    local state
-    state="$(docker inspect --format '{{.State.Running}}' "${container}" 2>/dev/null || true)"
-    if [[ "${state}" == "true" ]]; then
-      if docker logs --tail 200 "${container}" 2>&1 | grep -qE 'http server listening|starting channels and sidecars|\[gateway\] ready|heartbeat.*started'; then
-        ready=1
-        echo "[bench_wait_ready] ${container} is up and gateway is ready after ${i} polls"
-        return 0
-      fi
-    fi
-    local running
-    running="$(docker inspect --format '{{.State.Running}}|{{.State.Status}}' "${container}" 2>/dev/null || true)"
-    case "${running}" in
-      false|exited|dead|removing)
-        echo "[bench_wait_ready][FATAL] container ${container} state=${running}; dumping logs:" >&2
-        docker logs --tail 200 "${container}" >&2 || true
-        return 1
-        ;;
-    esac
-    sleep 2
-  done
-  echo "[bench_wait_ready][FATAL] gateway not ready in 180s" >&2
-  docker logs --tail 200 "${container}" >&2 || true
-  return 1
-}
+# 5. Wait for the openclaw container to start and the gateway to become ready.
 bench_wait_ready "${CONTAINER}"
 
-# 8. Export the contract for downstream env.sh scripts AND for subsequent
-#    GitHub Actions steps. We can't `export` from a subshell back into the
-#    caller, so we both export (for any subshells in this step) and write
-#    a small env file the next workflow step can `source`.
+# 6. Export the contract for downstream env.sh scripts and subsequent CI steps.
 export BENCH_CONTAINER="${CONTAINER}"
 export BENCH_MOUNT="/home/node/.openclaw"
 export BENCH_OPENCLAW="openclaw"
-export BENCH_COMPOSE_PROJECT="${COMPOSE_PROJECT}"
-export BENCH_ENV_FILE="${ENV_FILE}"
-export BENCH_DATA_DIR="${ENV_DIR}/openclaw-data"
+export BENCH_ENV_FILE="${ENV_DIR}/bench-runtime-env.sh"
 
-# Drop a sourceable env file for subsequent workflow steps.
-EXPORT_FILE="${ENV_DIR}/bench-runtime-env.sh"
-cat >"${EXPORT_FILE}" <<EOF
-# Auto-sourced by .github/workflows/benchmark.yml after env_setup.sh.
+# Drop a sourceable env file for subsequent workflow steps / local runner.
+EXPORT_FILE="${BENCH_ENV_FILE}"
+{
+  cat <<EOF
+# Auto-sourced by .github/workflows/benchmark.yml, local runners, and benchmark env.sh files.
+export BENCH_ROOT='${BENCH_ROOT}'
 export BENCH_CONTAINER='${CONTAINER}'
+export BENCH_CONTAINER_NAME='${BENCH_CONTAINER_NAME}'
+export BENCH_CONTAINER_RUNTIME='${BENCH_CONTAINER_RUNTIME}'
+export BENCH_CONTAINER_CLI='${BENCH_CONTAINER_CLI}'
 export BENCH_MOUNT='/home/node/.openclaw'
 export BENCH_OPENCLAW='openclaw'
-export BENCH_COMPOSE_PROJECT='${COMPOSE_PROJECT}'
-export BENCH_COMPOSE_ENV_FILE='${ENV_FILE}'
-export BENCH_DATA_DIR='${ENV_DIR}/openclaw-data'
-
-# Per-benchmark helpers. Source this file from a benchmark's env.sh, then
-# call \`bench_force_recreate\` to tear down the openclaw-bench container and
-# bring it back up. This guarantees each benchmark starts from a clean
-# container, so QA fixtures and runtime state from a previous benchmark
-# cannot leak into the current one. After the recreate we re-apply the repo
-# copy + openclaw.json patches (via bench_reapply_setup) and wait for the
-# gateway to be ready (via bench_wait_ready) before returning, so callers
-# can immediately exec into the new container without racing the gateway
-# init.
-
-bench_reapply_setup() {
-  local container="\${1:-\${BENCH_CONTAINER:-}}"
-  [[ -n "\${container}" ]] || { echo "[bench_reapply_setup][FATAL] no container" >&2; return 64; }
-  local root="${ROOT}"
-  echo "[bench_reapply_setup] docker cp repo into \${container}:/home/node/.openclaw"
-  docker exec "\${container}" bash -lc '
-    set -e
-    cd /home/node/.openclaw
-    find . -mindepth 1 -delete 2>/dev/null || true
-  '
-  tar --exclude='.git' --exclude='.github' --exclude='.env' \
-      --exclude='*.sqlite*' --exclude='qmd' --exclude='logs' \
-      --exclude='tasks' --exclude='credentials' --exclude='cron' \
-      --exclude='devices' --exclude='identity' --exclude='feishu' \
-      --exclude='extensions' --exclude='qqbot' --exclude='.openclaw' \
-      --exclude='.dreams' --exclude='dreaming' --exclude='.bench-runtime' \
-      --exclude='bench-results' \
-      -C "\${root}" -cf - . | \
-    docker exec -i "\${container}" tar -xf - -C /home/node/.openclaw
-  echo "[bench_reapply_setup] creating agent session dirs"
-  docker exec "\${container}" bash -lc '
-    set -e
-    for agent_id in main orchestrate ingest curate extract critic design spec audit ideate judge reviewer; do
-      mkdir -p "/home/node/.openclaw/agents/\${agent_id}/sessions"
-    done
-  '
-  echo "[bench_reapply_setup] chown /home/node/.openclaw -> 1000:1000"
-  docker exec "\${container}" chown -R 1000:1000 /home/node/.openclaw || true
-  echo "[bench_reapply_setup] patching openclaw.json (SecretRef)"
-  docker exec "\${container}" python3 -c '
-import json, pathlib
-p = pathlib.Path("/home/node/.openclaw/openclaw.json")
-data = json.loads(p.read_text(encoding="utf-8"))
-prov = data.setdefault("models", {}).setdefault("providers", {}).setdefault("minimax", {})
-prov["apiKey"] = {"source": "env", "provider": "default", "id": "MINIMAX_API_KEY"}
-default_prov = data.get("models", {}).get("providers", {}).pop("default", None)
-if default_prov is not None:
-    print("removed models.providers.default overlay (not needed for bench)")
-# Sandbox mode requires Docker-in-Docker which is not available in CI.
-# Disable sandboxing for the embedded agent runs.
-agents = data.setdefault("agents", {})
-defaults = agents.setdefault("defaults", {})
-defaults["sandbox"] = {"mode": "off"}
-# YOLO mode: auto-approve all tool calls so CI never stalls on prompts.
-defaults["elevatedDefault"] = "full"
-tools = data.setdefault("tools", {})
-tools.setdefault("exec", {})["mode"] = "full"
-p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-print("patched models.providers.minimax.apiKey -> SecretRef(MINIMAX_API_KEY)")
-print("patched agents.defaults.sandbox.mode -> off")
-print("patched agents.defaults.elevatedDefault -> full")
-print("patched tools.exec.mode -> full (no-approval)")
-'
-  docker exec "\${container}" chown 1000:1000 /home/node/.openclaw/openclaw.json
-}
-
-bench_wait_ready() {
-  local container="\${1:-\${BENCH_CONTAINER:-}}"
-  [[ -n "\${container}" ]] || { echo "[bench_wait_ready][FATAL] no container" >&2; return 64; }
-  echo "[bench_wait_ready] waiting for \${container} to come up and gateway to be ready"
-  local ready=0
-  for i in \$(seq 1 90); do
-    local state
-    state="\$(docker inspect --format '{{.State.Running}}' "\${container}" 2>/dev/null || true)"
-    if [[ "\${state}" == "true" ]]; then
-      if docker logs --tail 200 "\${container}" 2>&1 | grep -qE 'http server listening|starting channels and sidecars|\[gateway\] ready|heartbeat.*started'; then
-        ready=1
-        echo "[bench_wait_ready] \${container} is up and gateway is ready after \${i} polls"
-        return 0
-      fi
-    fi
-    local running
-    running="\$(docker inspect --format '{{.State.Running}}|{{.State.Status}}' "\${container}" 2>/dev/null || true)"
-    case "\${running}" in
-      false|exited|dead|removing)
-        echo "[bench_wait_ready][FATAL] container \${container} state=\${running}; dumping logs:" >&2
-        docker logs --tail 200 "\${container}" >&2 || true
-        return 1
-        ;;
-    esac
-    sleep 2
-  done
-  echo "[bench_wait_ready][FATAL] gateway not ready in 180s" >&2
-  docker logs --tail 200 "\${container}" >&2 || true
-  return 1
-}
-
-bench_force_recreate() {
-  if [ -z "\${BENCH_COMPOSE_PROJECT:-}" ] || [ -z "\${BENCH_COMPOSE_ENV_FILE:-}" ]; then
-    echo "[bench_force_recreate][FATAL] BENCH_COMPOSE_PROJECT / BENCH_COMPOSE_ENV_FILE not set" >&2
-    return 64
-  fi
-  local compose_file="${ROOT}/docker/docker-compose.bench.yml"
-  echo "[bench_force_recreate] bringing up openclaw-bench --force-recreate (project=\${BENCH_COMPOSE_PROJECT})"
-  set -a
-  # shellcheck disable=SC1090
-  . "\${BENCH_COMPOSE_ENV_FILE}"
-  set +a
-  docker compose --project-name "\${BENCH_COMPOSE_PROJECT}" \
-      -f "\${compose_file}" --env-file "\${BENCH_COMPOSE_ENV_FILE}" \
-      up -d --force-recreate openclaw-bench
-  # Refresh BENCH_CONTAINER to the new container name (compose reuses the
-  # service name unless the project name changed, but be defensive).
-  local new_container
-  new_container="\$(docker ps --filter "label=com.docker.compose.project=\${BENCH_COMPOSE_PROJECT}" --format '{{.Names}}' | head -n1)"
-  if [ -n "\${new_container}" ]; then
-    export BENCH_CONTAINER="\${new_container}"
-  fi
-  # Defensive: docker compose up -d --force-recreate occasionally leaves
-  # the container in created / exited state when the host docker daemon is
-  # under load. bench_reapply_setup would then fail with "container is not
-  # running". Explicitly start it.
-  local _state
-  _state="\$(docker inspect --format '{{.State.Running}}' "\${BENCH_CONTAINER}" 2>/dev/null || echo "false")"
-  if [ "\${_state}" != "true" ]; then
-    echo "[bench_force_recreate] container \${BENCH_CONTAINER} not running (state=\${_state}); starting"
-    docker start "\${BENCH_CONTAINER}" >/dev/null 2>&1 || true
-  fi
-  # The recreated container is bare: no repo, no SecretRef patch.
-  # Re-apply the same setup that env_setup.sh ran for
-  # the initial container, so subsequent exec calls see a fully-prepared
-  # environment.
-  bench_reapply_setup "\${BENCH_CONTAINER}"
-  bench_wait_ready "\${BENCH_CONTAINER}"
-}
+export BENCH_COMPOSE_PROJECT='${BENCH_COMPOSE_PROJECT}'
+export BENCH_COMPOSE_FILE='${BENCH_COMPOSE_FILE}'
+export BENCH_COMPOSE_ENV_FILE='${BENCH_COMPOSE_ENV_FILE}'
+export BENCH_DATA_DIR='${BENCH_DATA_DIR}'
+export BENCH_OPENCLAW_IMAGE_RESOLVED='${BENCH_OPENCLAW_IMAGE_RESOLVED}'
+export BENCH_ENV_FILE='${EXPORT_FILE}'
 EOF
+  declare -f bench_container_cli
+  declare -f bench_image_pull
+  declare -f bench_logs_tail
+  declare -f bench_is_running
+  declare -f bench_running_state
+  declare -f bench_runtime_up
+  declare -f bench_reapply_setup
+  declare -f bench_wait_ready
+  declare -f bench_force_recreate
+  declare -f bench_teardown
+} >"${EXPORT_FILE}"
+
 # Surface the file path so the workflow can source it without re-deriving.
 if [[ -n "${GITHUB_ENV:-}" ]]; then
   echo "BENCH_ENV_FILE=${EXPORT_FILE}" >> "${GITHUB_ENV}"
   echo "BENCH_CONTAINER=${CONTAINER}" >> "${GITHUB_ENV}"
+  echo "BENCH_CONTAINER_RUNTIME=${BENCH_CONTAINER_RUNTIME}" >> "${GITHUB_ENV}"
+  echo "BENCH_CONTAINER_CLI=${BENCH_CONTAINER_CLI}" >> "${GITHUB_ENV}"
   echo "BENCH_MOUNT=/home/node/.openclaw" >> "${GITHUB_ENV}"
   echo "BENCH_COMPOSE_PROJECT=${COMPOSE_PROJECT}" >> "${GITHUB_ENV}"
 fi
 
-log "ready: container=${BENCH_CONTAINER} mount=${BENCH_MOUNT} data_dir=${BENCH_DATA_DIR}"
+log "ready: runtime=${BENCH_CONTAINER_RUNTIME} container=${BENCH_CONTAINER} mount=${BENCH_MOUNT} data_dir=${BENCH_DATA_DIR}"
 log "runtime env file: ${EXPORT_FILE}"

@@ -12,7 +12,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 log() { printf '\n[paper-review-pipeline.env] %s\n' "$*"; }
 
 # Bring up a fresh container.
-if [[ -f "${BENCH_ENV_FILE}" ]]; then
+if [[ -n "${BENCH_ENV_FILE:-}" && -f "${BENCH_ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   . "${BENCH_ENV_FILE}"
   bench_force_recreate
