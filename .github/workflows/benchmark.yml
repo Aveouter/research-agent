@@ -411,7 +411,6 @@ jobs:
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           MINIMAX_BASE_URL: ${{ secrets.MINIMAX_BASE_URL }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BENCH_REPO: ${{ github.repository }}
           BENCH_PR_NUMBER: ${{ github.event.pull_request.number }}
