@@ -43,19 +43,8 @@ if [[ -f "${LOCAL_ENV_FILE}" ]]; then
 fi
 
 # 0. Secrets check
-# Backward-compat: if LLM_API_KEY is not set but the old MINIMAX_API_KEY is,
-# map it with a deprecation warning so existing local docker/.env.bench files
-# continue to work. This fallback will be removed in a future release.
 if [[ -z "${LLM_API_KEY:-}" ]]; then
-  if [[ -n "${MINIMAX_API_KEY:-}" ]]; then
-    log "MINIMAX_API_KEY is deprecated; rename it to LLM_API_KEY in docker/.env.bench"
-    export LLM_API_KEY="${MINIMAX_API_KEY}"
-  else
-    die "LLM_API_KEY is not set. Export it or put it in docker/.env.bench, then re-run."
-  fi
-fi
-if [[ -z "${LLM_BASE_URL:-}" ]] && [[ -n "${MINIMAX_BASE_URL:-}" ]]; then
-  export LLM_BASE_URL="${MINIMAX_BASE_URL}"
+  die "LLM_API_KEY is not set. Export it or put it in docker/.env.bench, then re-run."
 fi
 : "${LLM_BASE_URL:=https://api.minimaxi.com/anthropic}"
 export LLM_BASE_URL

@@ -137,10 +137,6 @@ fi
 [[ -n "${CLI_BASE_URL}" ]] && export LLM_BASE_URL="${CLI_BASE_URL}"
 [[ -n "${CLI_MODEL}" ]] && export LLM_MODEL="${CLI_MODEL}"
 
-# Backward-compat: map old MINIMAX_* vars to new LLM_* names.
-[[ -z "${LLM_API_KEY:-}" && -n "${MINIMAX_API_KEY:-}" ]] && export LLM_API_KEY="${MINIMAX_API_KEY}"
-[[ -z "${LLM_BASE_URL:-}" && -n "${MINIMAX_BASE_URL:-}" ]] && export LLM_BASE_URL="${MINIMAX_BASE_URL}"
-
 [[ -n "${LLM_API_KEY:-}" ]] || {
   echo "LLM_API_KEY is not set. Use --api-key, export it, or set it in docker/.env.bench." >&2
   exit 64

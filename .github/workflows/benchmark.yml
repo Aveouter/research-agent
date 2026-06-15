@@ -76,21 +76,12 @@ jobs:
       - name: "Verify required secrets"
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         run: |
-          # Backward-compat: fall back to old MINIMAX_API_KEY secret name if
-          # the new LLM_API_KEY is not yet configured. This allows the rename
-          # to happen in either order (secrets first, then code; or code first,
-          # then secrets).
-          if [ -n "${LLM_API_KEY:-}" ]; then
-            echo "using LLM_API_KEY secret"
-          elif [ -n "${MINIMAX_API_KEY:-}" ]; then
-            echo "::warning::LLM_API_KEY is not set; falling back to MINIMAX_API_KEY (deprecated). Rename it to LLM_API_KEY in repo Settings -> Secrets."
-            echo "LLM_API_KEY=${MINIMAX_API_KEY}" >> "${GITHUB_ENV}"
-          else
+          if [ -z "${LLM_API_KEY:-}" ]; then
             echo "::error::LLM_API_KEY is not configured. Add it to repo Settings -> Secrets and variables -> Actions before running benchmarks." >&2
             exit 1
           fi
+          echo "using LLM_API_KEY secret"
 
       - name: "Set up Python"
         uses: actions/setup-python@v5
@@ -107,9 +98,7 @@ jobs:
       - name: "Render docker env file from secrets"
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          MINIMAX_BASE_URL: ${{ secrets.MINIMAX_BASE_URL }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
           set -euo pipefail
@@ -118,8 +107,8 @@ jobs:
           import os, pathlib
           image = os.environ.get("OPENCLAW_IMAGE") or "acautomata/openclaw-docker-cn-im:latest"
           model = os.environ.get("LLM_MODEL") or "minimax/MiniMax-M2.7"
-          api_key = os.environ.get("LLM_API_KEY") or os.environ.get("MINIMAX_API_KEY") or ""
-          base_url = os.environ.get("LLM_BASE_URL") or os.environ.get("MINIMAX_BASE_URL") or "https://api.minimaxi.com/anthropic"
+          api_key = os.environ.get("LLM_API_KEY") or ""
+          base_url = os.environ.get("LLM_BASE_URL") or "https://api.minimaxi.com/anthropic"
           data = [
               "OPENCLAW_IMAGE=" + image,
               "OPENCLAW_DATA_DIR=" + os.environ.get("GITHUB_WORKSPACE", ".") + "/.bench-runtime/openclaw-data",
@@ -152,9 +141,7 @@ jobs:
       - name: "Unified env (pull image + docker compose up)"
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          MINIMAX_BASE_URL: ${{ secrets.MINIMAX_BASE_URL }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
           bash benchmarks/_common/env_setup.sh
@@ -328,17 +315,12 @@ jobs:
         if: steps.filter.outputs.skip != 'true'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         run: |
-          if [ -n "${LLM_API_KEY:-}" ]; then
-            echo "using LLM_API_KEY secret"
-          elif [ -n "${MINIMAX_API_KEY:-}" ]; then
-            echo "::warning::LLM_API_KEY is not set; falling back to MINIMAX_API_KEY (deprecated)."
-            echo "LLM_API_KEY=${MINIMAX_API_KEY}" >> "${GITHUB_ENV}"
-          else
+          if [ -z "${LLM_API_KEY:-}" ]; then
             echo "::error::LLM_API_KEY is not configured." >&2
             exit 1
           fi
+          echo "using LLM_API_KEY secret"
 
       - name: "Set up Python"
         if: steps.filter.outputs.skip != 'true'
@@ -408,9 +390,7 @@ jobs:
           BENCH_MOUNT: ${{ env.BENCH_MOUNT }}
           BENCH_OPENCLAW: openclaw
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          MINIMAX_BASE_URL: ${{ secrets.MINIMAX_BASE_URL }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BENCH_REPO: ${{ github.repository }}
           BENCH_PR_NUMBER: ${{ github.event.pull_request.number }}
