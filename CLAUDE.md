@@ -124,14 +124,15 @@ The system uses a **main agent → main agent skills → subagent → subagent s
 5. **Metrics 可复用**：`metrics.py` 必须直接调用 `benchmarks/_common/run_bench.py`（即 6 行 shim），不要自己写 `docker exec openclaw agent`。判分优先用 `benchmarks/_common/judge.py` 提供的 `judge_with_rules` / `judge_with_agent`；自己写 judge 时必须基于 QA 的 `gold_answer.must_contain` 或 `rubric`，禁止用硬编码字符串比对。
 6. **PR 评论字段**：CI 会在 PR 评论里汇总每个 benchmark 的 `pass_rate` 和 `avg_score`；新增 benchmark 必须能输出这两个汇总字段（在 `bench-report.json` 顶层），否则不会出现在 PR 评论里。
 7. **本地可复现**：推荐使用 `benchmarks/_common/run_local_benchmark.sh <name>` 一键运行单个 benchmark（自动选择 Docker 或 Apple `container` CLI）。手动等价：`bash benchmarks/_common/env_setup.sh && bash benchmarks/<name>/env.sh && python3 benchmarks/<name>/metrics.py`；CI 与本地行为一致。
-8. **不要把 secrets 写进仓库**：`MINIMAX_API_KEY` 走 GitHub Actions secret；本地开发用 `docker/.env.bench`（已 gitignore 候选）。`docker/.env.bench.example` 是只读模板。
+8. **不要把 secrets 写进仓库**：`LLM_API_KEY` 走 GitHub Actions secret；本地开发用 `docker/.env.bench`（已 gitignore 候选）。`docker/.env.bench.example` 是只读模板。
 
 GitHub 仓库必须配置以下 secret（你最后手动加）：
 
 | Secret | 必填 | 用途 |
 | --- | --- | --- |
-| `MINIMAX_API_KEY` | 是 | LLM provider key，给 main agent 和 LLM judge 用。未配置时 workflow fail-fast。 |
-| `MINIMAX_BASE_URL` | 否 | 默认 `https://api.minimaxi.com` |
+| `LLM_API_KEY` | 是 | LLM provider key，给 main agent 和 LLM judge 用。未配置时 workflow fail-fast。 |
+| `LLM_BASE_URL` | 否 | 默认 `https://api.minimaxi.com/anthropic` |
+| `LLM_MODEL` | 否 | 默认 `minimax/MiniMax-M2.7` |
 | `BENCH_BASE_RESULTS_JSON` | 否 | 上次 main 跑出的 summary（base64 字符串），用于 PR 评论做 delta 对比 |
 
 ### Adding New Agents

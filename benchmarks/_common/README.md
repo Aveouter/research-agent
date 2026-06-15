@@ -35,7 +35,7 @@ Shared CI/CD infrastructure for all benchmarks under `benchmarks/`.
 ## Running one benchmark locally
 
 ```bash
-# Set MINIMAX_API_KEY in docker/.env.bench first, then run exactly one benchmark.
+# Set LLM_API_KEY in docker/.env.bench first, then run exactly one benchmark.
 benchmarks/_common/run_local_benchmark.sh idea-generate-1
 
 # Runtime selection: auto (default), docker, or Apple's `container` CLI.

@@ -11,8 +11,9 @@
 #   BENCH_CONTAINER_RUNTIME=auto       Prefer a running Docker daemon, else container.
 #
 # Required env (set by CI, docker/.env.bench, or the caller):
-#   MINIMAX_API_KEY         -- LLM provider key (fail-fast if missing)
-#   MINIMAX_BASE_URL        -- optional, defaults to https://api.minimaxi.com
+#   LLM_API_KEY         -- LLM provider key (fail-fast if missing)
+#   LLM_BASE_URL        -- optional, defaults to https://api.minimaxi.com/anthropic
+#   LLM_MODEL           -- optional, defaults to minimax/MiniMax-M2.7
 #   BENCH_RUN_ID            -- used as the session key prefix and compose/project name
 #   BENCH_COMPOSE_FILE      -- optional, defaults to docker/docker-compose.bench.yml
 #   BENCH_OPENCLAW_IMAGE    -- optional, overrides the image tag
@@ -42,11 +43,24 @@ if [[ -f "${LOCAL_ENV_FILE}" ]]; then
 fi
 
 # 0. Secrets check
-if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
-  die "MINIMAX_API_KEY is not set. Export it or put it in docker/.env.bench, then re-run."
+# Backward-compat: if LLM_API_KEY is not set but the old MINIMAX_API_KEY is,
+# map it with a deprecation warning so existing local docker/.env.bench files
+# continue to work. This fallback will be removed in a future release.
+if [[ -z "${LLM_API_KEY:-}" ]]; then
+  if [[ -n "${MINIMAX_API_KEY:-}" ]]; then
+    log "MINIMAX_API_KEY is deprecated; rename it to LLM_API_KEY in docker/.env.bench"
+    export LLM_API_KEY="${MINIMAX_API_KEY}"
+  else
+    die "LLM_API_KEY is not set. Export it or put it in docker/.env.bench, then re-run."
+  fi
 fi
-: "${MINIMAX_BASE_URL:=https://api.minimaxi.com}"
-export MINIMAX_BASE_URL
+if [[ -z "${LLM_BASE_URL:-}" ]] && [[ -n "${MINIMAX_BASE_URL:-}" ]]; then
+  export LLM_BASE_URL="${MINIMAX_BASE_URL}"
+fi
+: "${LLM_BASE_URL:=https://api.minimaxi.com/anthropic}"
+export LLM_BASE_URL
+: "${LLM_MODEL:=minimax/MiniMax-M2.7}"
+export LLM_MODEL
 
 COMPOSE_FILE="${BENCH_COMPOSE_FILE:-${ROOT}/docker/docker-compose.bench.yml}"
 IMAGE="${BENCH_OPENCLAW_IMAGE:-${OPENCLAW_IMAGE:-acautomata/openclaw-docker-cn-im:latest}}"
@@ -188,8 +202,8 @@ bench_runtime_up() {
         --env LANGUAGE=en_US:en \
         --env LC_ALL=en_US.UTF-8 \
         --env SYNC_EXTENSIONS_MODE=none \
-        --env MINIMAX_API_KEY \
-        --env MINIMAX_BASE_URL \
+        --env LLM_API_KEY \
+        --env LLM_BASE_URL \
         --env OPENCLAW_GATEWAY_BIND=loopback \
         --env OPENCLAW_GATEWAY_MODE=local \
         --env OPENCLAW_GATEWAY_ALLOW_INSECURE_AUTH=true \
@@ -240,9 +254,9 @@ import json, os, pathlib
 p = pathlib.Path("/home/node/.openclaw/openclaw.json")
 data = json.loads(p.read_text(encoding="utf-8"))
 prov = data.setdefault("models", {}).setdefault("providers", {}).setdefault("minimax", {})
-prov["apiKey"] = {"source": "env", "provider": "default", "id": "MINIMAX_API_KEY"}
-custom_base = os.environ.get("MINIMAX_BASE_URL", "")
-default_base = "https://api.minimaxi.com"
+prov["apiKey"] = {"source": "env", "provider": "default", "id": "LLM_API_KEY"}
+custom_base = os.environ.get("LLM_BASE_URL", "")
+default_base = "https://api.minimaxi.com/anthropic"
 if custom_base and custom_base != default_base:
     prov["baseUrl"] = custom_base
     print(f"patched models.providers.minimax.baseUrl -> {custom_base}")
@@ -258,7 +272,7 @@ defaults["elevatedDefault"] = "full"
 tools = data.setdefault("tools", {})
 tools.setdefault("exec", {})["mode"] = "full"
 p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-print("patched models.providers.minimax.apiKey -> SecretRef(MINIMAX_API_KEY)")
+print("patched models.providers.minimax.apiKey -> SecretRef(LLM_API_KEY)")
 print("patched agents.defaults.sandbox.mode -> off")
 print("patched agents.defaults.elevatedDefault -> full")
 print("patched tools.exec.mode -> full (no-approval)")
@@ -343,9 +357,9 @@ TZ=Asia/Shanghai
 SYNC_OPENCLAW_CONFIG=false
 SYNC_EXTENSIONS_ON_START=false
 SYNC_MODEL_CONFIG=false
-MODEL_ID=${BENCH_MODEL:-minimax/MiniMax-M2.7}
-PRIMARY_MODEL=${BENCH_MODEL:-minimax/MiniMax-M2.7}
-BASE_URL=${MINIMAX_BASE_URL}
+MODEL_ID=${LLM_MODEL}
+PRIMARY_MODEL=${LLM_MODEL}
+BASE_URL=${LLM_BASE_URL}
 API_PROTOCOL=anthropic
 CONTEXT_WINDOW=200000
 MAX_TOKENS=8192
@@ -370,7 +384,7 @@ cat >"${BENCH_DATA_DIR}/openclaw.json" <<'PRESEEDEOF'
         "baseUrl": "https://api.minimaxi.com/anthropic",
         "api": "anthropic-messages",
         "authHeader": true,
-        "apiKey": {"source": "env", "provider": "default", "id": "MINIMAX_API_KEY"}
+        "apiKey": {"source": "env", "provider": "default", "id": "LLM_API_KEY"}
       }
     }
   }

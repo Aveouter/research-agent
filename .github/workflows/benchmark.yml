@@ -5,7 +5,7 @@ on:
   # `synchronize` fires for every new commit pushed to the PR branch.
   #
   # We use pull_request_target (not pull_request) so that fork PRs can
-  # access repository secrets (MINIMAX_API_KEY, etc.). The workflow file
+  # access repository secrets (LLM_API_KEY, etc.). The workflow file
   # itself is always read from the BASE repo, and we explicitly check out
   # the PR head SHA below so the fork's code is tested.
   #
@@ -41,7 +41,7 @@ permissions:
   issues: write
 
 # Default matrix: every benchmark gets its own job. They run sequentially
-# (max-parallel: 1) so that only one job uses MINIMAX_API_KEY at a time.
+# (max-parallel: 1) so that only one job uses LLM_API_KEY at a time.
 # `workflow_dispatch` may narrow this to a subset via the `only` input. The
 # aggregate job always waits for the whole matrix to settle (`if: always()`)
 # and renders whatever bench-report.json files exist.
@@ -75,10 +75,20 @@ jobs:
 
       - name: "Verify required secrets"
         env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         run: |
-          if [ -z "${MINIMAX_API_KEY:-}" ]; then
-            echo "::error::MINIMAX_API_KEY is not configured. Add it to repo Settings -> Secrets and variables -> Actions before running benchmarks." >&2
+          # Backward-compat: fall back to old MINIMAX_API_KEY secret name if
+          # the new LLM_API_KEY is not yet configured. This allows the rename
+          # to happen in either order (secrets first, then code; or code first,
+          # then secrets).
+          if [ -n "${LLM_API_KEY:-}" ]; then
+            echo "using LLM_API_KEY secret"
+          elif [ -n "${MINIMAX_API_KEY:-}" ]; then
+            echo "::warning::LLM_API_KEY is not set; falling back to MINIMAX_API_KEY (deprecated). Rename it to LLM_API_KEY in repo Settings -> Secrets."
+            echo "LLM_API_KEY=${MINIMAX_API_KEY}" >> "${GITHUB_ENV}"
+          else
+            echo "::error::LLM_API_KEY is not configured. Add it to repo Settings -> Secrets and variables -> Actions before running benchmarks." >&2
             exit 1
           fi
 
@@ -96,14 +106,20 @@ jobs:
       # env_setup.sh writes (kept in sync by code review).
       - name: "Render docker env file from secrets"
         env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           MINIMAX_BASE_URL: ${{ secrets.MINIMAX_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
           set -euo pipefail
           mkdir -p .bench-runtime
           python3 - <<'PYEOF'
           import os, pathlib
           image = os.environ.get("OPENCLAW_IMAGE") or "acautomata/openclaw-docker-cn-im:latest"
+          model = os.environ.get("LLM_MODEL") or "minimax/MiniMax-M2.7"
+          api_key = os.environ.get("LLM_API_KEY") or os.environ.get("MINIMAX_API_KEY") or ""
+          base_url = os.environ.get("LLM_BASE_URL") or os.environ.get("MINIMAX_BASE_URL") or "https://api.minimaxi.com/anthropic"
           data = [
               "OPENCLAW_IMAGE=" + image,
               "OPENCLAW_DATA_DIR=" + os.environ.get("GITHUB_WORKSPACE", ".") + "/.bench-runtime/openclaw-data",
@@ -115,9 +131,9 @@ jobs:
               "SYNC_OPENCLAW_CONFIG=false",
               "SYNC_EXTENSIONS_ON_START=false",
               "SYNC_MODEL_CONFIG=false",
-              "MODEL_ID=minimax/MiniMax-M2.7",
-              "PRIMARY_MODEL=minimax/MiniMax-M2.7",
-              "BASE_URL=" + (os.environ.get("MINIMAX_BASE_URL") or "https://api.minimaxi.com/anthropic"),
+              "MODEL_ID=" + model,
+              "PRIMARY_MODEL=" + model,
+              "BASE_URL=" + base_url,
               "API_PROTOCOL=anthropic",
               "CONTEXT_WINDOW=200000",
               "MAX_TOKENS=8192",
@@ -127,14 +143,19 @@ jobs:
               "OPENCLAW_WORKSPACE_ROOT=/home/node/.openclaw",
               "OPENCLAW_PLUGINS_ENABLED=false",
           ]
+          if api_key:
+              data.append("LLM_API_KEY=" + api_key)
           pathlib.Path(".bench-runtime/.env.bench").write_text("\n".join(data) + "\n")
           print("wrote .bench-runtime/.env.bench (image=" + image + ")")
           PYEOF
 
       - name: "Unified env (pull image + docker compose up)"
         env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           MINIMAX_BASE_URL: ${{ secrets.MINIMAX_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
           bash benchmarks/_common/env_setup.sh
 
@@ -208,7 +229,7 @@ jobs:
   # env.sh) so it starts from a known clean state.
   #
   # max-parallel: 1 forces sequential execution so that only one benchmark
-  # uses MINIMAX_API_KEY at a time, avoiding API rate-limit contention.
+  # uses LLM_API_KEY at a time, avoiding API rate-limit contention.
   bench:
     name: "Bench: ${{ matrix.bench }}"
     needs: setup
@@ -306,10 +327,16 @@ jobs:
       - name: "Verify required secrets"
         if: steps.filter.outputs.skip != 'true'
         env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         run: |
-          if [ -z "${MINIMAX_API_KEY:-}" ]; then
-            echo "::error::MINIMAX_API_KEY is not configured." >&2
+          if [ -n "${LLM_API_KEY:-}" ]; then
+            echo "using LLM_API_KEY secret"
+          elif [ -n "${MINIMAX_API_KEY:-}" ]; then
+            echo "::warning::LLM_API_KEY is not set; falling back to MINIMAX_API_KEY (deprecated)."
+            echo "LLM_API_KEY=${MINIMAX_API_KEY}" >> "${GITHUB_ENV}"
+          else
+            echo "::error::LLM_API_KEY is not configured." >&2
             exit 1
           fi
 
@@ -380,8 +407,11 @@ jobs:
           BENCH_CONTAINER: ${{ env.BENCH_CONTAINER }}
           BENCH_MOUNT: ${{ env.BENCH_MOUNT }}
           BENCH_OPENCLAW: openclaw
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           MINIMAX_BASE_URL: ${{ secrets.MINIMAX_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BENCH_REPO: ${{ github.repository }}
           BENCH_PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -458,6 +488,7 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
       BENCH_REPO: ${{ github.repository }}
       BENCH_PR_NUMBER: ${{ github.event.pull_request.number }}
       BENCH_BASE_SUMMARY: ${{ secrets.BENCH_BASE_RESULTS_JSON }}

@@ -149,7 +149,7 @@ def judge_with_agent(qa: dict, answer: str, agent_id: str = "reviewer",
     if container:
         cmd = [
             _container_cli(), "exec", "-i",
-            "-e", "MINIMAX_API_KEY", "-e", "MINIMAX_BASE_URL",
+            "-e", "LLM_API_KEY", "-e", "LLM_BASE_URL",
             container,
         ] + cmd
     if model:

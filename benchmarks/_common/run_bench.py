@@ -546,7 +546,7 @@ def run_agent(container: str, agent_id: str, qa: dict, run_id: str,
         "--session-key", session_key,
         "--timeout", str(qa.get("timeout_seconds", 1800)),
         interactive=True,
-        env=["MINIMAX_API_KEY", "MINIMAX_BASE_URL"],
+        env=["LLM_API_KEY", "LLM_BASE_URL"],
     )
     if model:
         cmd += ["--model", model]
@@ -861,7 +861,7 @@ def main(bench_name: str, agent_id: str | None = None) -> int:
                                        ROOT / "benchmarks" / bench_name / "bench-report.json"))
     container = os.environ.get("BENCH_CONTAINER", "")
     run_id = os.environ.get("BENCH_RUN_ID", f"local-{int(time.time())}")
-    model = os.environ.get("BENCH_MODEL")
+    model = os.environ.get("LLM_MODEL") or os.environ.get("BENCH_MODEL")
     # Hard policy: CI only ever calls `main`. Sub-agents are reached through
     # main's sessions_spawn, never directly.
     agent_id = agent_id or os.environ.get("BENCH_AGENT") or "main"

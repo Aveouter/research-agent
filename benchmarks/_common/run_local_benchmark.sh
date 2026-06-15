@@ -30,17 +30,17 @@ Options:
   --model MODEL                    Override the LLM model (e.g. minimax/MiniMax-M2.7).
                                    Default: read from docker/.env.bench or CI default.
   --base-url URL                   Override the LLM provider base URL.
-                                   Default: read from docker/.env.bench or https://api.minimaxi.com.
+                                   Default: read from docker/.env.bench or https://api.minimaxi.com/anthropic.
   --api-key KEY                    Override the LLM provider API key.
-                                   Default: read from docker/.env.bench or MINIMAX_API_KEY env var.
+                                   Default: read from docker/.env.bench or LLM_API_KEY env var.
   --debug                          Enable BENCH_DEBUG=1 artifacts.
   --keep-container                 Do not tear down the benchmark container.
   -h, --help                       Show this help.
 
 Credentials (in priority order):
   1. --api-key / --base-url / --model CLI flags.
-  2. docker/.env.bench file (MINIMAX_API_KEY, MINIMAX_BASE_URL, MODEL_ID).
-  3. Environment variables (MINIMAX_API_KEY, MINIMAX_BASE_URL, BENCH_MODEL).
+  2. docker/.env.bench file (LLM_API_KEY, LLM_BASE_URL, LLM_MODEL).
+  3. Environment variables (LLM_API_KEY, LLM_BASE_URL, LLM_MODEL).
 USAGE
 }
 
@@ -133,12 +133,16 @@ if [[ -f "${LOCAL_ENV_FILE}" ]]; then
   set +a
 fi
 # CLI flags override .env.bench and environment variables.
-[[ -n "${CLI_API_KEY}" ]] && export MINIMAX_API_KEY="${CLI_API_KEY}"
-[[ -n "${CLI_BASE_URL}" ]] && export MINIMAX_BASE_URL="${CLI_BASE_URL}"
-[[ -n "${CLI_MODEL}" ]] && export BENCH_MODEL="${CLI_MODEL}"
+[[ -n "${CLI_API_KEY}" ]] && export LLM_API_KEY="${CLI_API_KEY}"
+[[ -n "${CLI_BASE_URL}" ]] && export LLM_BASE_URL="${CLI_BASE_URL}"
+[[ -n "${CLI_MODEL}" ]] && export LLM_MODEL="${CLI_MODEL}"
 
-[[ -n "${MINIMAX_API_KEY:-}" ]] || {
-  echo "MINIMAX_API_KEY is not set. Use --api-key, export it, or set it in docker/.env.bench." >&2
+# Backward-compat: map old MINIMAX_* vars to new LLM_* names.
+[[ -z "${LLM_API_KEY:-}" && -n "${MINIMAX_API_KEY:-}" ]] && export LLM_API_KEY="${MINIMAX_API_KEY}"
+[[ -z "${LLM_BASE_URL:-}" && -n "${MINIMAX_BASE_URL:-}" ]] && export LLM_BASE_URL="${MINIMAX_BASE_URL}"
+
+[[ -n "${LLM_API_KEY:-}" ]] || {
+  echo "LLM_API_KEY is not set. Use --api-key, export it, or set it in docker/.env.bench." >&2
   exit 64
 }
 

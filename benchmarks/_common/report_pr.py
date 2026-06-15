@@ -68,7 +68,7 @@ def render(results_dir: Path, base: dict | None) -> str:
     lines = [MARKER, "# OpenClaw Benchmark Report", ""]
     lines.append(f"- Run id: `{os.environ.get('BENCH_RUN_ID', 'local')}`")
     lines.append(f"- Commit: `{os.environ.get('BENCH_COMMIT', 'unknown')}`")
-    lines.append(f"- Model: `{os.environ.get('BENCH_MODEL', 'default')}`")
+    lines.append(f"- Model: `{os.environ.get('BENCH_MODEL') or os.environ.get('LLM_MODEL', 'default')}`")
     lines.append("")
     lines.append("| Benchmark | QA | Passed | Pass rate | Avg score | Δ vs base |")
     lines.append("|---|---:|---:|---:|---:|---:|")

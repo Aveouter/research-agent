@@ -62,8 +62,8 @@ benchmarks/
 ```bash
 # 1) Prepare the .env (one-time)
 cp docker/.env.bench.example docker/.env.bench
-# then edit docker/.env.bench and set MINIMAX_API_KEY.
-# Optionally set MODEL_ID / PRIMARY_MODEL to use a different LLM.
+# then edit docker/.env.bench and set LLM_API_KEY.
+# Optionally set LLM_MODEL / LLM_BASE_URL to use a different LLM.
 
 # 2) Run exactly one benchmark in the local containerized CI env.
 # Auto prefers a running Docker daemon, then falls back to Apple's `container` CLI.

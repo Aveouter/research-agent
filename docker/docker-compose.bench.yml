@@ -23,7 +23,7 @@ services:
       # Sync flags. Keep model config sync disabled so init.sh never writes
       # plaintext credentials from API_KEY to disk. env_setup.sh patches a
       # SecretRef into openclaw.json instead; benchmark calls pass
-      # MINIMAX_API_KEY only to each `docker exec ... openclaw agent --local`
+      # LLM_API_KEY only to each `docker exec ... openclaw agent --local`
       # process.
       SYNC_OPENCLAW_CONFIG: "false"
       SYNC_EXTENSIONS_ON_START: "false"
@@ -34,8 +34,8 @@ services:
       # BASE_URL / API_PROTOCOL / CONTEXT_WINDOW / MAX_TOKENS from the container
       # env prevents init.sh from writing models.providers.default (which lacks
       # models and causes the upgraded gateway to reject the config).
-      MINIMAX_API_KEY: ${MINIMAX_API_KEY}
-      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL}
       # Channels: explicitly disabled so the gateway never tries to dial out.
       DM_POLICY: disabled
       GROUP_POLICY: disabled
